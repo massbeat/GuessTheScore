@@ -1,0 +1,54 @@
+import 'dotenv/config';
+import { Telegraf } from 'telegraf';
+import cron from 'node-cron';
+import { initDatabase } from './database';
+import { registerUserCommands } from './userCommands';
+import { registerAdminCommands } from './adminCommands';
+
+// ─── Validate required env vars ───────────────────────────────────────────────
+const requiredEnvVars = ['BOT_TOKEN', 'ADMIN_IDS', 'TARGET_GROUP_ID', 'FOOTBALL_DATA_API_KEY'];
+for (const key of requiredEnvVars) {
+  if (!process.env[key]) {
+    console.error(`❌ Missing required environment variable: ${key}`);
+    console.error('Please copy .env.example to .env and fill in your values.');
+    process.exit(1);
+  }
+}
+
+// ─── Init DB ─────────────────────────────────────────────────────────────────
+initDatabase();
+
+// ─── Init Bot ────────────────────────────────────────────────────────────────
+const bot = new Telegraf(process.env.BOT_TOKEN!);
+
+// IMPORTANT: Admin commands must be registered BEFORE user commands
+// because userCommands has a bot.on('text') catch-all handler that
+// must come last, otherwise it intercepts admin command messages.
+registerAdminCommands(bot);
+registerUserCommands(bot);
+
+// ─── Global error handler ─────────────────────────────────────────────────────
+bot.catch((err: any, ctx) => {
+  console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
+  console.error(err.stack);
+  try {
+    ctx.reply(`❌ An error occurred: ${err.message}`);
+  } catch {}
+});
+
+// ─── Cron: heartbeat log ──────────────────────────────────────────────────────
+cron.schedule('0 * * * *', () => {
+  console.log(`🕐 Bot heartbeat: ${new Date().toISOString()}`);
+});
+
+// ─── Launch ──────────────────────────────────────────────────────────────────
+bot.launch().then(() => {
+  console.log('🚀 Football Prediction Bot is running!');
+  console.log(`👑 Admins: ${process.env.ADMIN_IDS}`);
+  console.log(`👥 Target Group: ${process.env.TARGET_GROUP_ID}`);
+  console.log(`🔑 Football API key set: ${!!process.env.FOOTBALL_DATA_API_KEY}`);
+});
+
+// Graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
