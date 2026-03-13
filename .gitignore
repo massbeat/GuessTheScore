@@ -1,7 +1,11 @@
 node_modules/
-dist/
 data/
 .env
 .env.md
 .DS_Store
 *.db
+
+# Ignore all of dist/ except the pre-built bundle files
+dist/*
+!dist/bundle.js
+!dist/sql-wasm.wasm

@@ -1,9 +1,0 @@
-node_modules
-dist
-data
-.env
-.env.md
-.DS_Store
-.git
-*.db
-README.md

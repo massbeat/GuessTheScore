@@ -1,208 +1,146 @@
-# Deployment Guide — Football Prediction Bot
+# Deployment Guide — cPanel Hosting
 
-## Prerequisites
-
-- A VPS (Ubuntu 22.04+ recommended) with SSH access
-- Docker and Docker Compose installed on the VPS
-- A GitHub account with access to https://github.com/massbeat/GuessTheScore
-- Your `.env` values ready (BOT_TOKEN, ADMIN_IDS, TARGET_GROUP_ID, FOOTBALL_DATA_API_KEY)
+This bot uses **esbuild** to bundle the entire app (including all dependencies) into
+a single `dist/bundle.js` file. This means the server never needs to run `npm install`.
 
 ---
 
-## Part 1: Push Code to GitHub
+## How it works
 
-Run these commands **on your local machine** from the project folder:
-
-```bash
-# 1. Initialize git (if not already)
-cd /path/to/football-prediction-bot
-git init
-
-# 2. Add the remote
-git remote add origin https://github.com/massbeat/GuessTheScore.git
-
-# 3. Stage all files (.gitignore will exclude node_modules, .env, dist, data)
-git add -A
-
-# 4. Verify what will be committed (make sure .env is NOT listed)
-git status
-
-# 5. Commit
-git commit -m "Initial commit: Football Prediction Bot"
-
-# 6. Push to main branch
-git branch -M main
-git push -u origin main
-```
-
-If the repo already has content and you get a rejection, use:
-```bash
-git push -u origin main --force
-```
+- You build locally on your Mac → produces `dist/bundle.js` + `dist/sql-wasm.wasm`
+- You push those files to GitHub
+- The server pulls from GitHub and runs the bundle directly
+- No Docker, no npm install, no compilation needed on the server
 
 ---
 
-## Part 2: Set Up the VPS
+## First-time setup
 
-### 2.1 — Install Docker (if not already installed)
-
-SSH into your VPS and run:
+### 1. Local Mac — install and build
 
 ```bash
-# Update packages
-sudo apt update && sudo apt upgrade -y
-
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-
-# Add your user to the docker group (avoids needing sudo)
-sudo usermod -aG docker $USER
-
-# Install Docker Compose plugin
-sudo apt install docker-compose-plugin -y
-
-# Log out and back in for group change to take effect
-exit
+npm install
+npm run build
 ```
 
-SSH back in and verify:
+Verify `dist/bundle.js` and `dist/sql-wasm.wasm` were created:
 ```bash
-docker --version
-docker compose version
+ls dist/
 ```
 
-### 2.2 — Clone the Repo
+### 2. Push to GitHub
 
 ```bash
-cd ~
-git clone https://github.com/massbeat/GuessTheScore.git
-cd GuessTheScore
+git add .
+git commit -m "Initial deployment build"
+git push
 ```
 
-### 2.3 — Create the .env File
+### 3. Server — clone the repo via cPanel Git
+
+1. Log into cPanel
+2. Go to **Git Version Control**
+3. Click **Create**
+4. Fill in:
+   - Clone URL: `https://github.com/massbeat/GuessTheScore.git`
+   - Repository Path: `/home2/YOUR_USERNAME/repositories/GuessTheScore`
+5. Click **Create**
+
+### 4. Server — create the .env file via SSH
+
+Connect via SSH (or use cPanel Terminal), then:
 
 ```bash
+cd ~/repositories/GuessTheScore
 cp .env.example .env
 nano .env
 ```
 
-Fill in your actual values:
+Fill in your values:
 ```
-BOT_TOKEN=your_bot_token_from_botfather
+BOT_TOKEN=your_telegram_bot_token
 ADMIN_IDS=your_telegram_user_id
-TARGET_GROUP_ID=your_group_chat_id
+TARGET_GROUP_ID=-your_group_chat_id
 FOOTBALL_DATA_API_KEY=your_api_key
-DB_PATH=./data/predictions.db
+DB_PATH=/home2/YOUR_USERNAME/repositories/GuessTheScore/data/predictions.db
 ```
 
-Save and exit (Ctrl+X, Y, Enter).
-
-### 2.4 — Build and Start the Bot
-
+Save with `Ctrl+X → Y → Enter`, then create the data folder:
 ```bash
-docker compose up -d --build
+mkdir -p data
 ```
 
-This will:
-- Build the Docker image (install dependencies, compile TypeScript)
-- Start the bot in the background
-- Persist the SQLite database in a Docker volume
+### 5. cPanel — set up the Node.js App
 
-### 2.5 — Verify It's Running
+1. Go to cPanel → **Setup Node.js App**
+2. Click **Create Application**
+3. Fill in:
+   - **Node.js version:** 22 (or highest available)
+   - **Application mode:** Production
+   - **Application root:** `/home2/YOUR_USERNAME/repositories/GuessTheScore`
+   - **Application startup file:** `dist/bundle.js`
+4. Click **Create**
 
-```bash
-# Check container status
-docker compose ps
+### 6. cPanel — add environment variables
 
-# View logs
-docker compose logs -f
+On the Node.js App edit page, add these under **Environment Variables**:
 
-# You should see:
-# ✅ Database initialized
-# 🚀 Football Prediction Bot is running!
-```
+| Key | Value |
+|-----|-------|
+| `BOT_TOKEN` | your telegram bot token |
+| `ADMIN_IDS` | your telegram user id |
+| `TARGET_GROUP_ID` | your group chat id |
+| `FOOTBALL_DATA_API_KEY` | your api key |
+| `DB_PATH` | `/home2/YOUR_USERNAME/repositories/GuessTheScore/data/predictions.db` |
 
-Press Ctrl+C to exit the log viewer (the bot keeps running).
+### 7. Start the bot
+
+In cPanel → **Setup Node.js App** → click **Start**.
+
+The bot is now running 24/7.
 
 ---
 
-## Part 3: Managing the Bot
+## Updating after code changes
 
-### View logs
+Every time you change the code, do this on your **local Mac**:
+
 ```bash
-cd ~/GuessTheScore
-docker compose logs -f --tail 100
-```
-
-### Stop the bot
-```bash
-docker compose down
-```
-
-### Restart the bot
-```bash
-docker compose restart
-```
-
-### Update after code changes
-
-On your local machine, push changes:
-```bash
-git add -A
-git commit -m "Description of changes"
+npm run build
+git add dist/bundle.js dist/sql-wasm.wasm
+git add src/          # if you changed source files
+git commit -m "Update bot"
 git push
 ```
 
-On the VPS, pull and rebuild:
+Then on the **server** (via SSH or cPanel Terminal):
+
 ```bash
-cd ~/GuessTheScore
+cd ~/repositories/GuessTheScore
 git pull
-docker compose up -d --build
 ```
 
-### Backup the database
-
-The SQLite database lives in a Docker volume. To back it up:
-```bash
-# Find the volume
-docker volume inspect guessthescore_bot-data
-
-# Copy the db file out
-docker cp football-prediction-bot:/app/data/predictions.db ~/predictions-backup.db
-```
-
-### Restore from backup
-```bash
-docker cp ~/predictions-backup.db football-prediction-bot:/app/data/predictions.db
-docker compose restart
-```
+Then in cPanel → **Setup Node.js App** → click **Restart**.
 
 ---
 
-## Troubleshooting
+## Useful SSH commands
 
-**Bot won't start — missing env vars:**
 ```bash
-docker compose logs | head -20
-# Look for: ❌ Missing required environment variable
-# Fix: edit .env and rebuild
+# Check if bot process is running
+ps aux | grep bundle.js
+
+# View app logs (path shown in cPanel Node.js App page)
+tail -f ~/logs/GuessTheScore.log
+
+# Manually test the bundle
+cd ~/repositories/GuessTheScore
+source ~/nodevenv/repositories/GuessTheScore/22/bin/activate
+node dist/bundle.js
 ```
 
-**Container keeps restarting:**
-```bash
-docker compose logs --tail 50
-# Check for errors, then fix and rebuild
-docker compose up -d --build
-```
+## Backup the database
 
-**Permission denied on Docker:**
 ```bash
-sudo usermod -aG docker $USER
-# Log out and back in
-```
-
-**Port conflict (if you add a health endpoint later):**
-```bash
-# Check what's using the port
-sudo lsof -i :3000
+cp ~/repositories/GuessTheScore/data/predictions.db ~/predictions_backup_$(date +%Y%m%d).db
 ```
