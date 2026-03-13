@@ -74,7 +74,10 @@ function transaction(fn: () => void): void {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 export async function initDatabase(): Promise<void> {
-  const SQL = await initSqlJs();
+  // Locate the WASM file next to the running script (works for both bundle and dev)
+  const SQL = await initSqlJs({
+    locateFile: (file: string) => path.join(path.dirname(process.argv[1]), file)
+  });
 
   if (fs.existsSync(dbPath)) {
     const fileBuffer = fs.readFileSync(dbPath);
