@@ -15,40 +15,46 @@ for (const key of requiredEnvVars) {
   }
 }
 
-// ─── Init DB ─────────────────────────────────────────────────────────────────
-initDatabase();
+async function main() {
+  // ─── Init DB ───────────────────────────────────────────────────────────────
+  await initDatabase();
 
-// ─── Init Bot ────────────────────────────────────────────────────────────────
-const bot = new Telegraf(process.env.BOT_TOKEN!);
+  // ─── Init Bot ──────────────────────────────────────────────────────────────
+  const bot = new Telegraf(process.env.BOT_TOKEN!);
 
-// IMPORTANT: Admin commands must be registered BEFORE user commands
-// because userCommands has a bot.on('text') catch-all handler that
-// must come last, otherwise it intercepts admin command messages.
-registerAdminCommands(bot);
-registerUserCommands(bot);
+  // IMPORTANT: Admin commands must be registered BEFORE user commands
+  // because userCommands has a bot.on('text') catch-all handler that
+  // must come last, otherwise it intercepts admin command messages.
+  registerAdminCommands(bot);
+  registerUserCommands(bot);
 
-// ─── Global error handler ─────────────────────────────────────────────────────
-bot.catch((err: any, ctx) => {
-  console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
-  console.error(err.stack);
-  try {
-    ctx.reply(`❌ An error occurred: ${err.message}`);
-  } catch {}
-});
+  // ─── Global error handler ──────────────────────────────────────────────────
+  bot.catch((err: any, ctx) => {
+    console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
+    console.error(err.stack);
+    try {
+      ctx.reply(`❌ An error occurred: ${err.message}`);
+    } catch {}
+  });
 
-// ─── Cron: heartbeat log ──────────────────────────────────────────────────────
-cron.schedule('0 * * * *', () => {
-  console.log(`🕐 Bot heartbeat: ${new Date().toISOString()}`);
-});
+  // ─── Cron: heartbeat log ───────────────────────────────────────────────────
+  cron.schedule('0 * * * *', () => {
+    console.log(`🕐 Bot heartbeat: ${new Date().toISOString()}`);
+  });
 
-// ─── Launch ──────────────────────────────────────────────────────────────────
-bot.launch().then(() => {
+  // ─── Launch ────────────────────────────────────────────────────────────────
+  await bot.launch();
   console.log('🚀 Football Prediction Bot is running!');
   console.log(`👑 Admins: ${process.env.ADMIN_IDS}`);
   console.log(`👥 Target Group: ${process.env.TARGET_GROUP_ID}`);
   console.log(`🔑 Football API key set: ${!!process.env.FOOTBALL_DATA_API_KEY}`);
-});
 
-// Graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  // Graceful stop
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+}
+
+main().catch(err => {
+  console.error('💥 Fatal error:', err);
+  process.exit(1);
+});
