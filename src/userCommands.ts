@@ -48,7 +48,8 @@ const USER_HELP = (name: string) =>
   `✅ Correct goal difference → <b>2 pts</b>\n` +
   `👍 Correct outcome → <b>1 pt</b>\n` +
   `❌ Wrong outcome → <b>0 pts</b>\n\n` +
-  `<i>Predictions lock 5 minutes before kickoff.</i>`;
+  `<i>Predictions lock 5 minutes before kickoff.</i>\n\n` +
+  `☕ <b>Enjoying the bot?</b> <a href="https://buymeacoffee.com/massbeat">Buy me a coffee!</a>`;
 
 const ADMIN_HELP = (name: string) =>
   `👋 Welcome, <b>${name}</b>! You have <b>admin access</b>.\n\n` +
@@ -78,7 +79,8 @@ const ADMIN_HELP = (name: string) =>
   `<code>PL</code> Premier League  •  <code>CL</code> Champions League\n` +
   `<code>BL1</code> Bundesliga  •  <code>SA</code> Serie A\n` +
   `<code>PD</code> La Liga  •  <code>FL1</code> Ligue 1\n` +
-  `<code>DED</code> Eredivisie  •  <code>PPL</code> Primeira Liga`;
+  `<code>DED</code> Eredivisie  •  <code>PPL</code> Primeira Liga\n\n` +
+  `☕ <b>Enjoying the bot?</b> <a href="https://buymeacoffee.com/massbeat">Buy me a coffee!</a>`;
 
 export function registerUserCommands(bot: Telegraf): void {
 
@@ -91,7 +93,7 @@ export function registerUserCommands(bot: Telegraf): void {
     upsertUser(user.id, user.username, user.first_name);
     const name = escapeHtml(user.first_name);
     const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: 'HTML' });
+    await sendPrivate(ctx, user.id, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
   });
 
   // ─── /help ────────────────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ export function registerUserCommands(bot: Telegraf): void {
     upsertUser(user.id, user.username, user.first_name);
     const name = escapeHtml(user.first_name);
     const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: 'HTML' });
+    await sendPrivate(ctx, user.id, msg, { parse_mode: 'HTML', disable_web_page_preview: true });
   });
 
   // ─── /matches — show list with Predict buttons ───────────────────────────

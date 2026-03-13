@@ -16,6 +16,7 @@ import {
 import { fetchCompetitions, fetchFixturesByCompetition, fetchMatchById } from './footballApi';
 import { isAdmin, formatKickoff, escapeHtml } from './helpers';
 import { calculatePoints, pointsLabel } from './scoring';
+import { logAdminAction } from './logger';
 
 // Maps messageId -> array of matchIds shown in that message's keyboard
 // This lets the toggle callback redraw ALL buttons in a message, not just the one tapped
@@ -129,6 +130,7 @@ export function registerAdminCommands(bot: Telegraf): void {
       }
 
       fixtures.forEach(f => upsertMatch(f));
+      logAdminAction(ctx.from!.id, 'LOAD_COMPETITION', `code=${code} fixtures=${fixtures.length}`);
 
       // Group by matchday
       const byMatchday = new Map<string, typeof fixtures>();
@@ -189,6 +191,7 @@ export function registerAdminCommands(bot: Telegraf): void {
       }
 
       fixtures.forEach(f => upsertMatch(f));
+      logAdminAction(ctx.from!.id, 'FETCH_MATCHES', `code=${code} matchday=${matchday ?? 'upcoming'} count=${fixtures.length}`);
 
       // Group by matchday
       const byMatchday = new Map<string, typeof fixtures>();
@@ -228,9 +231,11 @@ export function registerAdminCommands(bot: Telegraf): void {
     const nowActive = match.status !== 'active';
     if (nowActive) {
       activateMatch(matchId);
+      logAdminAction(ctx.from!.id, 'ACTIVATE_MATCH', `matchId=${matchId} ${match.home_team} vs ${match.away_team}`);
       await ctx.answerCbQuery(`✅ Added: ${match.home_team} vs ${match.away_team}`);
     } else {
       deactivateMatch(matchId);
+      logAdminAction(ctx.from!.id, 'DEACTIVATE_MATCH', `matchId=${matchId} ${match.home_team} vs ${match.away_team}`);
       await ctx.answerCbQuery(`⬜ Removed: ${match.home_team} vs ${match.away_team}`);
     }
 
@@ -356,6 +361,7 @@ export function registerAdminCommands(bot: Telegraf): void {
   bot.action('confirm_clearleaderboard', adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const { usersReset, predictionsDeleted } = clearAllScoresAndPredictions();
+    logAdminAction(ctx.from!.id, 'CLEAR_LEADERBOARD', `predictionsDeleted=${predictionsDeleted} usersReset=${usersReset}`);
     await ctx.editMessageText(
       `🗑 <b>Leaderboard Cleared!</b>\n\n` +
       `• ${predictionsDeleted} predictions deleted\n` +
@@ -401,6 +407,7 @@ export function registerAdminCommands(bot: Telegraf): void {
   bot.action('confirm_clearmatchday', adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const count = deactivateAllMatches();
+    logAdminAction(ctx.from!.id, 'CLEAR_MATCHDAY', `matchesDeactivated=${count}`);
     await ctx.editMessageText(
       `🗑 <b>Matchday Cleared!</b>\n\n` +
       `${count} matches deactivated. No matches are open for predictions.\n` +
@@ -450,6 +457,7 @@ export function registerAdminCommands(bot: Telegraf): void {
   bot.action('confirm_resetfinished', adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const { matchesReset, predictionsCleared, pointsDeducted } = resetFinishedMatches();
+    logAdminAction(ctx.from!.id, 'RESET_FINISHED', `matchesReset=${matchesReset} predictionsCleared=${predictionsCleared} pointsDeducted=${pointsDeducted}`);
     await ctx.editMessageText(
       `🔄 <b>Finished Matches Reset!</b>\n\n` +
       `• ${matchesReset} matches reset to pending\n` +
@@ -475,6 +483,7 @@ async function finalizeMatch(
   match: any
 ): Promise<void> {
   setMatchResult(matchId, homeScore, awayScore);
+  logAdminAction(ctx.from?.id ?? 0, 'FINALIZE_MATCH', `matchId=${matchId} ${match.home_team} ${homeScore}-${awayScore} ${match.away_team}`);
   const predictions = getPredictionsForMatch(matchId);
 
   let text =

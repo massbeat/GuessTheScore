@@ -1,69 +1,82 @@
 # ⚽ Football Prediction Bot
 
-A Telegram bot for running a football prediction competition within a specific group.
+A Telegram bot for running football score prediction competitions within a group. Users predict match scores, earn points, and compete on a leaderboard.
+
+> ☕ If you find this useful, [buy me a coffee](https://buymeacoffee.com/massbeat)!
 
 ---
 
-## 🚀 Quick Setup (Step by Step)
+## ✨ Features
 
-### Step 1: Prerequisites
+- Users predict exact scores for active matches via inline buttons
+- Predictions lock automatically 5 minutes before kickoff
+- Points awarded: 3 for exact score, 2 for correct goal difference, 1 for correct outcome
+- Live leaderboard posted in the group
+- Admin panel for fetching matches from football-data.org API
+- Private DM responses — predictions stay hidden from other users
+- SQLite database — no external database needed
+- Bundled into a single file for easy deployment on any host
+
+---
+
+## 🛠 Local Installation
+
+### Prerequisites
+
 - [Node.js](https://nodejs.org/) v18 or higher
-- A Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
-- A [RapidAPI](https://rapidapi.com/) account with access to [API-Football](https://rapidapi.com/api-sports/api/api-football)
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- A free API key from [football-data.org](https://www.football-data.org/client/register)
 
----
+### Step 1 — Clone the repo
 
-### Step 2: Install Dependencies
+```bash
+git clone https://github.com/massbeat/GuessTheScore.git
+cd GuessTheScore
+```
+
+### Step 2 — Install dependencies
 
 ```bash
 npm install
 ```
 
----
-
-### Step 3: Configure Environment
-
-Copy the example env file and fill in your values:
+### Step 3 — Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Open `.env` and fill in all values:
 
+```env
+BOT_TOKEN=your_telegram_bot_token
+ADMIN_IDS=123456789
+TARGET_GROUP_ID=-1001234567890
+FOOTBALL_DATA_API_KEY=your_api_key
+DB_PATH=./data/predictions.db
+LOG_DIR=./logs
 ```
-BOT_TOKEN=        ← Your bot token from @BotFather
-ADMIN_IDS=        ← Your Telegram user ID (see below how to get it)
-TARGET_GROUP_ID=  ← Your group chat ID (see below)
-RAPIDAPI_KEY=     ← Your RapidAPI key
-```
 
-#### 🔍 How to get your Telegram User ID
-1. Start a chat with [@userinfobot](https://t.me/userinfobot)
-2. It will reply with your User ID
+#### How to get your Telegram User ID
+Start a chat with [@userinfobot](https://t.me/userinfobot) — it replies with your ID instantly.
 
-#### 🔍 How to get your Group Chat ID
-**Option A (easiest):**
-1. Add [@userinfobot](https://t.me/userinfobot) to your group
-2. It will post the group's Chat ID (a negative number like `-1001234567890`)
-3. Remove the bot after
-
-**Option B:**
+#### How to get your Group Chat ID
 1. Add your bot to the group
 2. Send any message in the group
-3. Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-4. Find the `"chat":{"id":...}` value in the response
+3. Open: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+4. Find `"chat":{"id":...}` in the response — it's a negative number like `-1001234567890`
 
----
+#### How to get a Football Data API key
+Register for free at [football-data.org](https://www.football-data.org/client/register). The free tier covers the major leagues (Premier League, Champions League, Bundesliga, La Liga, Serie A, Ligue 1).
 
-### Step 4: Build & Run
+### Step 4 — Build and run
 
-**Development (with ts-node):**
+**Development (live reload):**
 ```bash
 npm run dev
 ```
 
-**Production (compiled):**
+**Production (build then run):**
 ```bash
 npm run build
 npm start
@@ -71,57 +84,45 @@ npm start
 
 ---
 
-## 📋 Bot Commands Reference
+## 📋 Commands Reference
 
 ### 👤 User Commands
+
 | Command | Description |
 |---------|-------------|
-| `/start` | Register and see help |
-| `/matches` | List open fixtures |
-| `/predict <id> <home>-<away>` | Submit/update prediction |
-| `/mystats` | Your points and history |
-| `/leaderboard` | Top 20 players |
-
-**Example prediction:**
-```
-/predict 105 2-1
-```
-This predicts Home team wins 2-1 for match #105.
-
----
+| `/start` | Register and see welcome message |
+| `/help` | Show all commands and scoring rules |
+| `/matches` | List open fixtures with Predict buttons |
+| `/missing` | Matches you haven't predicted yet |
+| `/mypicks` | Your current active predictions |
+| `/mystats` | Your total points and prediction history |
+| `/leaderboard` | Top 20 players posted in the group |
 
 ### 👑 Admin Commands
+
 | Command | Description |
 |---------|-------------|
-| `/admin_fetch 2024-03-15` | Fetch fixtures from API for a date |
-| `/admin_active` | Show currently active matches |
-| `/admin_update <match_id>` | Fetch final score and award points |
-| `/admin_manual_score <id> <home>-<away>` | Manually set score if API fails |
+| `/admin_competitions` | Browse all competitions with buttons |
+| `/admin_fetch <code> [matchday]` | Fetch matches by competition code |
+| `/admin_active` | List currently active matches |
+| `/admin_update <match_id>` | Fetch score from API and award points |
+| `/admin_manual_score <id> <home>-<away>` | Set score manually |
+| `/admin_clearleaderboard` | Reset all scores and predictions |
+| `/admin_clearmatchday` | Deactivate all active matches |
+| `/admin_resetfinished` | Reset finished matches back to pending |
 
----
+**Free tier competition codes:**
 
-## 🎮 How to Run a Competition
-
-### Admin Workflow:
-
-1. **Before matchday:**
-   ```
-   /admin_fetch 2024-03-15
-   ```
-   Bot shows inline buttons — click to toggle ✅/⬜ each match you want in the competition.
-
-2. **Users predict** using `/predict` until 5 minutes before kickoff (auto-locked).
-
-3. **After matches end:**
-   ```
-   /admin_update 856291
-   ```
-   Bot fetches the score from API, calculates points, and posts results for all predictors.
-
-   If API is down:
-   ```
-   /admin_manual_score 856291 2-1
-   ```
+| Code | League |
+|------|--------|
+| `PL` | Premier League |
+| `CL` | Champions League |
+| `BL1` | Bundesliga |
+| `SA` | Serie A |
+| `PD` | La Liga |
+| `FL1` | Ligue 1 |
+| `DED` | Eredivisie |
+| `PPL` | Primeira Liga |
 
 ---
 
@@ -135,71 +136,93 @@ This predicts Home team wins 2-1 for match #105.
 | ❌ Wrong outcome | 0 pts |
 
 **Examples:**
-- Predict 2-1, Actual 2-1 → **3 pts** (exact)
-- Predict 2-1, Actual 3-2 → **2 pts** (both home wins by 1)
-- Predict 1-1, Actual 2-2 → **2 pts** (both draws)
-- Predict 2-0, Actual 3-1 → **2 pts** (home wins by 2)
-- Predict 1-0, Actual 3-0 → **1 pt** (correct winner, wrong diff)
-- Predict 2-1, Actual 0-1 → **0 pts** (wrong outcome)
+
+| Your Prediction | Actual Result | Points | Reason |
+|-----------------|---------------|--------|--------|
+| 2-1 | 2-1 | **3** | Exact score |
+| 2-1 | 3-2 | **2** | Both home win by 1 goal |
+| 1-1 | 2-2 | **2** | Both draws |
+| 1-0 | 3-0 | **1** | Correct winner, wrong margin |
+| 2-1 | 0-1 | **0** | Wrong outcome |
+
+---
+
+## 🎮 Admin Workflow
+
+### 1. Before matchday — add matches
+
+```
+/admin_competitions
+```
+Browse competitions and click a button to load its fixtures. Toggle ✅/⬜ to activate matches for prediction.
+
+Or fetch directly by code:
+```
+/admin_fetch PL        ← all upcoming Premier League matches
+/admin_fetch CL 8      ← Champions League matchday 8
+```
+
+### 2. During matchday — users predict
+
+Users type `/matches` or `/missing` to see open fixtures and submit predictions via inline buttons. Predictions lock 5 minutes before kickoff.
+
+### 3. After matches — finalize results
+
+```
+/admin_update 856291
+```
+Fetches the score from the API, calculates points, and posts results.
+
+If the API is unavailable:
+```
+/admin_manual_score 856291 2-1
+```
 
 ---
 
 ## 🗂 Project Structure
 
 ```
-football-prediction-bot/
+GuessTheScore/
 ├── src/
-│   ├── index.ts          # Entry point, bot setup
-│   ├── database.ts       # SQLite DB schema & queries
-│   ├── footballApi.ts    # API-Football client
-│   ├── userCommands.ts   # /start, /matches, /predict, etc.
-│   ├── adminCommands.ts  # /admin_fetch, /admin_update, etc.
-│   ├── scoring.ts        # Points calculation
-│   └── helpers.ts        # Utilities (admin check, lockout, etc.)
-├── data/
-│   └── predictions.db    # SQLite database (auto-created)
-├── .env.example
+│   ├── index.ts           # Entry point, bot setup
+│   ├── database.ts        # SQLite schema and all queries
+│   ├── footballApi.ts     # football-data.org API client
+│   ├── userCommands.ts    # User-facing commands
+│   ├── adminCommands.ts   # Admin-only commands
+│   ├── scoring.ts         # Points calculation logic
+│   ├── helpers.ts         # Utilities (auth, formatting, DMs)
+│   └── logger.ts          # Admin action logging
+├── dist/
+│   ├── bundle.js          # Pre-built production bundle
+│   └── sql-wasm.wasm      # SQLite WebAssembly binary
+├── data/                  # SQLite database (auto-created, gitignored)
+├── logs/                  # Admin action logs (auto-created, gitignored)
+├── .env.example           # Environment variable template
 ├── package.json
 └── tsconfig.json
 ```
 
 ---
 
-## 🔒 Group Membership Check
+## 🔒 Important Notes
 
-The bot calls Telegram's `getChatMember` API to verify that users are in your target group before allowing any actions. Non-members get an "Access Denied" message.
-
-**Important:** The bot must be an **Administrator** in your group for membership checks to work on private groups.
-
----
-
-## 🛠 Troubleshooting
-
-**Bot doesn't respond:**
-- Check `BOT_TOKEN` is correct
-- Make sure bot is not already running in another process
-
-**"Access Denied" for all users:**
-- Make sure `TARGET_GROUP_ID` is correct (usually a negative number)
-- Make sure the bot is an admin in the group
-
-**API fetch returns nothing:**
-- Verify your `RAPIDAPI_KEY` on rapidapi.com
-- Check your RapidAPI subscription for API-Football
-
-**Predictions not locking:**
-- `kickoff_time` is stored in UTC; ensure your system clock is accurate
+- The bot must be an **Administrator** in the group for membership checks to work on private groups
+- Predictions are sent via **private DM** — other users cannot see individual predictions
+- `/mystats` and `/leaderboard` post in the group so everyone can see standings
+- The database is a single SQLite file stored in `./data/predictions.db`
+- Admin actions are logged to `./logs/admin.log` with timestamps
 
 ---
 
-## ☁️ Deploying to a Server
+## 🚀 Deploying to a Server
 
-For 24/7 operation, deploy to a VPS (e.g. DigitalOcean, Hetzner) and use PM2:
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full step-by-step instructions for deploying to cPanel hosting.
 
-```bash
-npm install -g pm2
-npm run build
-pm2 start dist/index.js --name football-bot
-pm2 save
-pm2 startup
-```
+---
+
+## ☕ Support
+
+If this bot brings joy to your group, consider supporting the project:
+
+[Buy Me a Coffee ☕](https://buymeacoffee.com/massbeat)

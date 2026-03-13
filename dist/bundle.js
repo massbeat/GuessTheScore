@@ -104,8 +104,8 @@ var require_package = __commonJS({
 // node_modules/dotenv/lib/main.js
 var require_main = __commonJS({
   "node_modules/dotenv/lib/main.js"(exports2, module2) {
-    var fs2 = require("fs");
-    var path2 = require("path");
+    var fs3 = require("fs");
+    var path3 = require("path");
     var os = require("os");
     var crypto6 = require("crypto");
     var packageJson = require_package();
@@ -213,7 +213,7 @@ var require_main = __commonJS({
       if (options && options.path && options.path.length > 0) {
         if (Array.isArray(options.path)) {
           for (const filepath of options.path) {
-            if (fs2.existsSync(filepath)) {
+            if (fs3.existsSync(filepath)) {
               possibleVaultPath = filepath.endsWith(".vault") ? filepath : `${filepath}.vault`;
             }
           }
@@ -221,15 +221,15 @@ var require_main = __commonJS({
           possibleVaultPath = options.path.endsWith(".vault") ? options.path : `${options.path}.vault`;
         }
       } else {
-        possibleVaultPath = path2.resolve(process.cwd(), ".env.vault");
+        possibleVaultPath = path3.resolve(process.cwd(), ".env.vault");
       }
-      if (fs2.existsSync(possibleVaultPath)) {
+      if (fs3.existsSync(possibleVaultPath)) {
         return possibleVaultPath;
       }
       return null;
     }
     function _resolveHome(envPath) {
-      return envPath[0] === "~" ? path2.join(os.homedir(), envPath.slice(1)) : envPath;
+      return envPath[0] === "~" ? path3.join(os.homedir(), envPath.slice(1)) : envPath;
     }
     function _configVault(options) {
       const debug = Boolean(options && options.debug);
@@ -246,7 +246,7 @@ var require_main = __commonJS({
       return { parsed };
     }
     function configDotenv(options) {
-      const dotenvPath = path2.resolve(process.cwd(), ".env");
+      const dotenvPath = path3.resolve(process.cwd(), ".env");
       let encoding = "utf8";
       const debug = Boolean(options && options.debug);
       const quiet = options && "quiet" in options ? options.quiet : true;
@@ -270,13 +270,13 @@ var require_main = __commonJS({
       }
       let lastError;
       const parsedAll = {};
-      for (const path3 of optionPaths) {
+      for (const path4 of optionPaths) {
         try {
-          const parsed = DotenvModule.parse(fs2.readFileSync(path3, { encoding }));
+          const parsed = DotenvModule.parse(fs3.readFileSync(path4, { encoding }));
           DotenvModule.populate(parsedAll, parsed, options);
         } catch (e) {
           if (debug) {
-            _debug(`Failed to load ${path3} ${e.message}`);
+            _debug(`Failed to load ${path4} ${e.message}`);
           }
           lastError = e;
         }
@@ -291,7 +291,7 @@ var require_main = __commonJS({
         const shortPaths = [];
         for (const filePath of optionPaths) {
           try {
-            const relative = path2.relative(process.cwd(), filePath);
+            const relative = path3.relative(process.cwd(), filePath);
             shortPaths.push(relative);
           } catch (e) {
             if (debug) {
@@ -4787,14 +4787,14 @@ var require_url_state_machine = __commonJS({
       return url2.replace(/\u0009|\u000A|\u000D/g, "");
     }
     function shortenPath(url2) {
-      const path2 = url2.path;
-      if (path2.length === 0) {
+      const path3 = url2.path;
+      if (path3.length === 0) {
         return;
       }
-      if (url2.scheme === "file" && path2.length === 1 && isNormalizedWindowsDriveLetter(path2[0])) {
+      if (url2.scheme === "file" && path3.length === 1 && isNormalizedWindowsDriveLetter(path3[0])) {
         return;
       }
-      path2.pop();
+      path3.pop();
     }
     function includesCredentials(url2) {
       return url2.username !== "" || url2.password !== "";
@@ -7354,10 +7354,10 @@ var require_client = __commonJS({
     };
     Object.defineProperty(exports2, "__esModule", { value: true });
     var crypto6 = __importStar(require("crypto"));
-    var fs2 = __importStar(require("fs"));
+    var fs3 = __importStar(require("fs"));
     var promises_1 = require("fs/promises");
     var https2 = __importStar(require("https"));
-    var path2 = __importStar(require("path"));
+    var path3 = __importStar(require("path"));
     var node_fetch_1 = __importDefault(require_lib2());
     var check_1 = require_check();
     var compact_1 = require_compact();
@@ -7520,8 +7520,8 @@ var require_client = __commonJS({
         if (typeof media.source === "string") {
           const source = await (0, promises_1.realpath)(media.source);
           if ((await (0, promises_1.stat)(source)).isFile()) {
-            fileName = (_c = media.filename) !== null && _c !== void 0 ? _c : path2.basename(media.source);
-            mediaSource = await fs2.createReadStream(media.source);
+            fileName = (_c = media.filename) !== null && _c !== void 0 ? _c : path3.basename(media.source);
+            mediaSource = await fs3.createReadStream(media.source);
           } else {
             throw new TypeError(`Unable to upload '${media.source}', not a file`);
           }
@@ -9279,9 +9279,9 @@ var require_telegraf = __commonJS({
        * You must call `bot.telegram.setWebhook` for this to work.
        * You should probably use {@link Telegraf.createWebhook} instead.
        */
-      webhookCallback(path2 = "/", opts = {}) {
+      webhookCallback(path3 = "/", opts = {}) {
         const { secretToken } = opts;
-        return (0, webhook_1.default)(this.webhookFilter.bind({ hookPath: path2, path: path2, secretToken }), (update, res) => this.handleUpdate(update, res));
+        return (0, webhook_1.default)(this.webhookFilter.bind({ hookPath: path3, path: path3, secretToken }), (update, res) => this.handleUpdate(update, res));
       }
       getDomainOpts(opts) {
         var _a;
@@ -9289,17 +9289,17 @@ var require_telegraf = __commonJS({
         if (protocol)
           debug("Unexpected protocol in domain, telegraf will use https:", opts.domain);
         const domain = protocol ? new url_1.URL(opts.domain).host : opts.domain;
-        const path2 = (_a = opts.path) !== null && _a !== void 0 ? _a : `/telegraf/${this.secretPathComponent()}`;
-        const url2 = `https://${domain}${path2}`;
-        return { domain, path: path2, url: url2 };
+        const path3 = (_a = opts.path) !== null && _a !== void 0 ? _a : `/telegraf/${this.secretPathComponent()}`;
+        const url2 = `https://${domain}${path3}`;
+        return { domain, path: path3, url: url2 };
       }
       /**
        * Specify a url to receive incoming updates via webhook.
        * Returns an Express-style middleware you can pass to app.use()
        */
       async createWebhook(opts) {
-        const { domain, path: path2, ...extra } = opts;
-        const domainOpts = this.getDomainOpts({ domain, path: path2 });
+        const { domain, path: path3, ...extra } = opts;
+        const domainOpts = this.getDomainOpts({ domain, path: path3 });
         await this.telegram.setWebhook(domainOpts.url, extra);
         debug(`Webhook set to ${domainOpts.url}`);
         return this.webhookCallback(domainOpts.path, {
@@ -9312,8 +9312,8 @@ var require_telegraf = __commonJS({
           await this.handleUpdate(update);
         });
       }
-      startWebhook(path2, tlsOptions, port, host, cb, secretToken) {
-        const webhookCb = this.webhookCallback(path2, { secretToken });
+      startWebhook(path3, tlsOptions, port, host, cb, secretToken) {
+        const webhookCb = this.webhookCallback(path3, { secretToken });
         const callback = typeof cb === "function" ? (req, res) => webhookCb(req, res, () => cb(req, res)) : webhookCb;
         this.webhookServer = tlsOptions != null ? https2.createServer(tlsOptions, callback) : http3.createServer(callback);
         this.webhookServer.listen(port, host, () => {
@@ -9677,7 +9677,7 @@ var require_input = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.fromFileId = exports2.fromURL = exports2.fromURLStream = exports2.fromReadableStream = exports2.fromBuffer = exports2.fromLocalFile = void 0;
-    var fromLocalFile = (path2, filename) => ({ source: path2, filename });
+    var fromLocalFile = (path3, filename) => ({ source: path3, filename });
     exports2.fromLocalFile = fromLocalFile;
     var fromBuffer = (buffer, filename) => ({ source: buffer, filename });
     exports2.fromBuffer = fromBuffer;
@@ -11051,7 +11051,7 @@ var require_scheduled_task = __commonJS({
 var require_background_scheduled_task = __commonJS({
   "node_modules/node-cron/src/background-scheduled-task/index.js"(exports2, module2) {
     var EventEmitter2 = require("events");
-    var path2 = require("path");
+    var path3 = require("path");
     var { fork } = require("child_process");
     var uuid = (init_esm_node(), __toCommonJS(esm_node_exports));
     var daemonPath = `${__dirname}/daemon.js`;
@@ -11086,7 +11086,7 @@ var require_background_scheduled_task = __commonJS({
         options.scheduled = true;
         this.forkProcess.send({
           type: "register",
-          path: path2.resolve(this.taskPath),
+          path: path3.resolve(this.taskPath),
           cron: this.cronExpression,
           options
         });
@@ -11698,15 +11698,15 @@ var require_sql_wasm = __commonJS({
         "undefined" != typeof __filename ? ya = __filename : ba && (ya = self.location.href);
         var za = "", Aa, Ba;
         if (ca) {
-          var fs2 = require("node:fs");
+          var fs3 = require("node:fs");
           za = __dirname + "/";
           Ba = (a) => {
             a = Ca(a) ? new URL(a) : a;
-            return fs2.readFileSync(a);
+            return fs3.readFileSync(a);
           };
           Aa = async (a) => {
             a = Ca(a) ? new URL(a) : a;
-            return fs2.readFileSync(a, void 0);
+            return fs3.readFileSync(a, void 0);
           };
           1 < process.argv.length && (wa = process.argv[1].replace(/\\/g, "/"));
           process.argv.slice(2);
@@ -11988,7 +11988,7 @@ var require_sql_wasm = __commonJS({
               if (ca) {
                 var b = Buffer.alloc(256), c = 0, d = process.stdin.fd;
                 try {
-                  c = fs2.readSync(d, b, 0, 256);
+                  c = fs3.readSync(d, b, 0, 256);
                 } catch (e) {
                   if (e.toString().includes("EOF")) c = 0;
                   else throw e;
@@ -22156,11 +22156,11 @@ var require_mime_types = __commonJS({
       }
       return exts[0];
     }
-    function lookup(path2) {
-      if (!path2 || typeof path2 !== "string") {
+    function lookup(path3) {
+      if (!path3 || typeof path3 !== "string") {
         return false;
       }
-      var extension2 = extname("x." + path2).toLowerCase().substr(1);
+      var extension2 = extname("x." + path3).toLowerCase().substr(1);
       if (!extension2) {
         return false;
       }
@@ -23265,11 +23265,11 @@ var require_form_data = __commonJS({
     "use strict";
     var CombinedStream = require_combined_stream();
     var util3 = require("util");
-    var path2 = require("path");
+    var path3 = require("path");
     var http3 = require("http");
     var https2 = require("https");
     var parseUrl = require("url").parse;
-    var fs2 = require("fs");
+    var fs3 = require("fs");
     var Stream = require("stream").Stream;
     var crypto6 = require("crypto");
     var mime = require_mime_types();
@@ -23336,7 +23336,7 @@ var require_form_data = __commonJS({
         if (value.end != void 0 && value.end != Infinity && value.start != void 0) {
           callback(null, value.end + 1 - (value.start ? value.start : 0));
         } else {
-          fs2.stat(value.path, function(err, stat) {
+          fs3.stat(value.path, function(err, stat) {
             if (err) {
               callback(err);
               return;
@@ -23393,11 +23393,11 @@ var require_form_data = __commonJS({
     FormData3.prototype._getContentDisposition = function(value, options) {
       var filename;
       if (typeof options.filepath === "string") {
-        filename = path2.normalize(options.filepath).replace(/\\/g, "/");
+        filename = path3.normalize(options.filepath).replace(/\\/g, "/");
       } else if (options.filename || value && (value.name || value.path)) {
-        filename = path2.basename(options.filename || value && (value.name || value.path));
+        filename = path3.basename(options.filename || value && (value.name || value.path));
       } else if (value && value.readable && hasOwn(value, "httpVersion")) {
-        filename = path2.basename(value.client._httpMessage.path || "");
+        filename = path3.basename(value.client._httpMessage.path || "");
       }
       if (filename) {
         return 'filename="' + filename + '"';
@@ -24521,7 +24521,9 @@ var USER_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>!
 \u{1F44D} Correct outcome \u2192 <b>1 pt</b>
 \u274C Wrong outcome \u2192 <b>0 pts</b>
 
-<i>Predictions lock 5 minutes before kickoff.</i>`;
+<i>Predictions lock 5 minutes before kickoff.</i>
+
+\u2615 <b>Enjoying the bot?</b> <a href="https://buymeacoffee.com/massbeat">Buy me a coffee!</a>`;
 var ADMIN_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>! You have <b>admin access</b>.
 
 <b>\u{1F464} User Commands:</b>
@@ -24556,7 +24558,9 @@ var ADMIN_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>! You have <b>admin
 <code>PL</code> Premier League  \u2022  <code>CL</code> Champions League
 <code>BL1</code> Bundesliga  \u2022  <code>SA</code> Serie A
 <code>PD</code> La Liga  \u2022  <code>FL1</code> Ligue 1
-<code>DED</code> Eredivisie  \u2022  <code>PPL</code> Primeira Liga`;
+<code>DED</code> Eredivisie  \u2022  <code>PPL</code> Primeira Liga
+
+\u2615 <b>Enjoying the bot?</b> <a href="https://buymeacoffee.com/massbeat">Buy me a coffee!</a>`;
 function registerUserCommands(bot) {
   bot.command("start", async (ctx) => {
     const user = ctx.from;
@@ -24566,7 +24570,7 @@ function registerUserCommands(bot) {
     upsertUser(user.id, user.username, user.first_name);
     const name = escapeHtml(user.first_name);
     const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML" });
+    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML", disable_web_page_preview: true });
   });
   bot.command("help", async (ctx) => {
     const user = ctx.from;
@@ -24576,7 +24580,7 @@ function registerUserCommands(bot) {
     upsertUser(user.id, user.username, user.first_name);
     const name = escapeHtml(user.first_name);
     const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML" });
+    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML", disable_web_page_preview: true });
   });
   bot.command("matches", async (ctx) => {
     const user = ctx.from;
@@ -25349,9 +25353,9 @@ function isVisitable(thing) {
 function removeBrackets(key) {
   return utils_default.endsWith(key, "[]") ? key.slice(0, -2) : key;
 }
-function renderKey(path2, key, dots) {
-  if (!path2) return key;
-  return path2.concat(key).map(function each(token, i) {
+function renderKey(path3, key, dots) {
+  if (!path3) return key;
+  return path3.concat(key).map(function each(token, i) {
     token = removeBrackets(token);
     return !dots && i ? "[" + token + "]" : token;
   }).join(dots ? "." : "");
@@ -25404,13 +25408,13 @@ function toFormData(obj, formData, options) {
     }
     return value;
   }
-  function defaultVisitor(value, key, path2) {
+  function defaultVisitor(value, key, path3) {
     let arr = value;
     if (utils_default.isReactNative(formData) && utils_default.isReactNativeBlob(value)) {
-      formData.append(renderKey(path2, key, dots), convertValue(value));
+      formData.append(renderKey(path3, key, dots), convertValue(value));
       return false;
     }
-    if (value && !path2 && typeof value === "object") {
+    if (value && !path3 && typeof value === "object") {
       if (utils_default.endsWith(key, "{}")) {
         key = metaTokens ? key : key.slice(0, -2);
         value = JSON.stringify(value);
@@ -25429,7 +25433,7 @@ function toFormData(obj, formData, options) {
     if (isVisitable(value)) {
       return true;
     }
-    formData.append(renderKey(path2, key, dots), convertValue(value));
+    formData.append(renderKey(path3, key, dots), convertValue(value));
     return false;
   }
   const stack = [];
@@ -25438,16 +25442,16 @@ function toFormData(obj, formData, options) {
     convertValue,
     isVisitable
   });
-  function build(value, path2) {
+  function build(value, path3) {
     if (utils_default.isUndefined(value)) return;
     if (stack.indexOf(value) !== -1) {
-      throw Error("Circular reference detected in " + path2.join("."));
+      throw Error("Circular reference detected in " + path3.join("."));
     }
     stack.push(value);
     utils_default.forEach(value, function each(el, key) {
-      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path2, exposedHelpers);
+      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path3, exposedHelpers);
       if (result === true) {
-        build(el, path2 ? path2.concat(key) : [key]);
+        build(el, path3 ? path3.concat(key) : [key]);
       }
     });
     stack.pop();
@@ -25659,7 +25663,7 @@ var platform_default = {
 // node_modules/axios/lib/helpers/toURLEncodedForm.js
 function toURLEncodedForm(data, options) {
   return toFormData_default(data, new platform_default.classes.URLSearchParams(), {
-    visitor: function(value, key, path2, helpers) {
+    visitor: function(value, key, path3, helpers) {
       if (platform_default.isNode && utils_default.isBuffer(value)) {
         this.append(key, value.toString("base64"));
         return false;
@@ -25689,11 +25693,11 @@ function arrayToObject(arr) {
   return obj;
 }
 function formDataToJSON(formData) {
-  function buildPath(path2, value, target, index) {
-    let name = path2[index++];
+  function buildPath(path3, value, target, index) {
+    let name = path3[index++];
     if (name === "__proto__") return true;
     const isNumericKey = Number.isFinite(+name);
-    const isLast = index >= path2.length;
+    const isLast = index >= path3.length;
     name = !name && utils_default.isArray(target) ? target.length : name;
     if (isLast) {
       if (utils_default.hasOwnProp(target, name)) {
@@ -25706,7 +25710,7 @@ function formDataToJSON(formData) {
     if (!target[name] || !utils_default.isObject(target[name])) {
       target[name] = [];
     }
-    const result = buildPath(path2, value, target[name], index);
+    const result = buildPath(path3, value, target[name], index);
     if (result && utils_default.isArray(target[name])) {
       target[name] = arrayToObject(target[name]);
     }
@@ -27087,9 +27091,9 @@ var http_default = isHttpAdapterSupported && function httpAdapter(config) {
       auth = urlUsername + ":" + urlPassword;
     }
     auth && headers.delete("authorization");
-    let path2;
+    let path3;
     try {
-      path2 = buildURL(
+      path3 = buildURL(
         parsed.pathname + parsed.search,
         config.params,
         config.paramsSerializer
@@ -27107,7 +27111,7 @@ var http_default = isHttpAdapterSupported && function httpAdapter(config) {
       false
     );
     const options = {
-      path: path2,
+      path: path3,
       method,
       headers: headers.toJSON(),
       agents: { http: config.httpAgent, https: config.httpsAgent },
@@ -27356,14 +27360,14 @@ var isURLSameOrigin_default = platform_default.hasStandardBrowserEnv ? /* @__PUR
 var cookies_default = platform_default.hasStandardBrowserEnv ? (
   // Standard browser envs support document.cookie
   {
-    write(name, value, expires, path2, domain, secure, sameSite) {
+    write(name, value, expires, path3, domain, secure, sameSite) {
       if (typeof document === "undefined") return;
       const cookie = [`${name}=${encodeURIComponent(value)}`];
       if (utils_default.isNumber(expires)) {
         cookie.push(`expires=${new Date(expires).toUTCString()}`);
       }
-      if (utils_default.isString(path2)) {
-        cookie.push(`path=${path2}`);
+      if (utils_default.isString(path3)) {
+        cookie.push(`path=${path3}`);
       }
       if (utils_default.isString(domain)) {
         cookie.push(`domain=${domain}`);
@@ -28712,6 +28716,27 @@ function pointsLabel(points) {
   }
 }
 
+// src/logger.ts
+var import_fs2 = __toESM(require("fs"));
+var import_path2 = __toESM(require("path"));
+var LOG_DIR = process.env.LOG_DIR || "./logs";
+var ADMIN_LOG_FILE = import_path2.default.join(LOG_DIR, "admin.log");
+if (!import_fs2.default.existsSync(LOG_DIR)) {
+  import_fs2.default.mkdirSync(LOG_DIR, { recursive: true });
+}
+function logAdminAction(adminId, action, details) {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  const line = details ? `[${timestamp}] ADMIN:${adminId} | ${action} | ${details}
+` : `[${timestamp}] ADMIN:${adminId} | ${action}
+`;
+  try {
+    import_fs2.default.appendFileSync(ADMIN_LOG_FILE, line, "utf8");
+  } catch (err) {
+    console.error("\u26A0\uFE0F Failed to write admin log:", err);
+  }
+  console.log(`\u{1F4CB} ${line.trim()}`);
+}
+
 // src/adminCommands.ts
 var messageMatchIds = /* @__PURE__ */ new Map();
 function buildMatchKeyboard(matchIds) {
@@ -28808,6 +28833,7 @@ Try a specific matchday: <code>/admin_fetch ${code} 28</code>`,
         );
       }
       fixtures.forEach((f) => upsertMatch(f));
+      logAdminAction(ctx.from.id, "LOAD_COMPETITION", `code=${code} fixtures=${fixtures.length}`);
       const byMatchday = /* @__PURE__ */ new Map();
       for (const f of fixtures) {
         const key = f.matchday ? `Matchday ${f.matchday}` : "Upcoming";
@@ -28851,6 +28877,7 @@ Toggle \u2705/\u2B1C to add or remove matches from the competition:`,
         );
       }
       fixtures.forEach((f) => upsertMatch(f));
+      logAdminAction(ctx.from.id, "FETCH_MATCHES", `code=${code} matchday=${matchday ?? "upcoming"} count=${fixtures.length}`);
       const byMatchday = /* @__PURE__ */ new Map();
       for (const f of fixtures) {
         const key = f.matchday ? `Matchday ${f.matchday}` : "Upcoming";
@@ -28883,9 +28910,11 @@ Check your FOOTBALL_DATA_API_KEY is valid.`,
     const nowActive = match.status !== "active";
     if (nowActive) {
       activateMatch(matchId);
+      logAdminAction(ctx.from.id, "ACTIVATE_MATCH", `matchId=${matchId} ${match.home_team} vs ${match.away_team}`);
       await ctx.answerCbQuery(`\u2705 Added: ${match.home_team} vs ${match.away_team}`);
     } else {
       deactivateMatch(matchId);
+      logAdminAction(ctx.from.id, "DEACTIVATE_MATCH", `matchId=${matchId} ${match.home_team} vs ${match.away_team}`);
       await ctx.answerCbQuery(`\u2B1C Removed: ${match.home_team} vs ${match.away_team}`);
     }
     try {
@@ -28990,6 +29019,7 @@ This will:
   bot.action("confirm_clearleaderboard", adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const { usersReset, predictionsDeleted } = clearAllScoresAndPredictions();
+    logAdminAction(ctx.from.id, "CLEAR_LEADERBOARD", `predictionsDeleted=${predictionsDeleted} usersReset=${usersReset}`);
     await ctx.editMessageText(
       `\u{1F5D1} <b>Leaderboard Cleared!</b>
 
@@ -29033,6 +29063,7 @@ No new predictions can be made until matches are activated again.
   bot.action("confirm_clearmatchday", adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const count = deactivateAllMatches();
+    logAdminAction(ctx.from.id, "CLEAR_MATCHDAY", `matchesDeactivated=${count}`);
     await ctx.editMessageText(
       `\u{1F5D1} <b>Matchday Cleared!</b>
 
@@ -29081,6 +29112,7 @@ Matches will be available for selection again.
   bot.action("confirm_resetfinished", adminOnly, async (ctx) => {
     await ctx.answerCbQuery();
     const { matchesReset, predictionsCleared, pointsDeducted } = resetFinishedMatches();
+    logAdminAction(ctx.from.id, "RESET_FINISHED", `matchesReset=${matchesReset} predictionsCleared=${predictionsCleared} pointsDeducted=${pointsDeducted}`);
     await ctx.editMessageText(
       `\u{1F504} <b>Finished Matches Reset!</b>
 
@@ -29099,6 +29131,7 @@ Use /admin_active or /admin_fetch to re-activate matches.`,
 }
 async function finalizeMatch(ctx, matchId, homeScore, awayScore, match) {
   setMatchResult(matchId, homeScore, awayScore);
+  logAdminAction(ctx.from?.id ?? 0, "FINALIZE_MATCH", `matchId=${matchId} ${match.home_team} ${homeScore}-${awayScore} ${match.away_team}`);
   const predictions = getPredictionsForMatch(matchId);
   let text = `\u2705 <b>Match Finalized!</b>
 
