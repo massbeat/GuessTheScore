@@ -59,9 +59,18 @@ async function main() {
   console.log(`👥 Target Group: ${process.env.TARGET_GROUP_ID}`);
   console.log(`🔑 Football API key set: ${!!process.env.FOOTBALL_DATA_API_KEY}`);
 
-  // Graceful stop
-  process.once('SIGINT', () => bot.stop('SIGINT'));
-  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  // Graceful stop — must call process.exit() after bot.stop() because
+  // node-cron keeps the event loop alive and the process would otherwise
+  // never exit, leaving cPanel unable to cleanly restart the app.
+  const shutdown = (signal: string) => {
+    console.log(`\n⚠️  Received ${signal}, shutting down...`);
+    bot.stop(signal);
+    // Give Telegraf 2 seconds to finish any in-flight requests, then exit
+    setTimeout(() => process.exit(0), 2000);
+  };
+
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch(err => {

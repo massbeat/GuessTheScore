@@ -29193,8 +29193,14 @@ async function main() {
   console.log(`\u{1F451} Admins: ${process.env.ADMIN_IDS}`);
   console.log(`\u{1F465} Target Group: ${process.env.TARGET_GROUP_ID}`);
   console.log(`\u{1F511} Football API key set: ${!!process.env.FOOTBALL_DATA_API_KEY}`);
-  process.once("SIGINT", () => bot.stop("SIGINT"));
-  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  const shutdown = (signal) => {
+    console.log(`
+\u26A0\uFE0F  Received ${signal}, shutting down...`);
+    bot.stop(signal);
+    setTimeout(() => process.exit(0), 2e3);
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 main().catch((err) => {
   console.error("\u{1F4A5} Fatal error:", err);
