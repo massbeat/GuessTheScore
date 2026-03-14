@@ -84,7 +84,10 @@ export async function initDatabase(): Promise<void> {
   // FastCGI wrapper directory (/usr/local/lsws/fcgi-bin/), not our dist/ folder,
   // so any locateFile approach would fail. Embedding the WASM in the bundle
   // via esbuild --loader:.wasm=binary is the only reliable solution.
-  const SQL = await initSqlJs({ wasmBinary: sqlWasm });
+  // sqlWasm is a base64 string (esbuild --loader:.wasm=base64).
+  // Decode with Buffer.from() — works on all Node.js versions unlike Uint8Array.fromBase64.
+  const wasmBinary = Buffer.from(sqlWasm, 'base64');
+  const SQL = await initSqlJs({ wasmBinary: wasmBinary as unknown as ArrayBuffer });
 
   if (fs.existsSync(dbPath)) {
     const fileBuffer = fs.readFileSync(dbPath);

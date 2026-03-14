@@ -1,6 +1,6 @@
-// Type declaration for .wasm files imported via esbuild --loader:.wasm=binary
-// esbuild inlines the binary as a Buffer (Uint8Array subclass) in CJS output
+// Type declaration for .wasm files imported via esbuild --loader:.wasm=base64
+// esbuild inlines the file as a base64 string; decode with Buffer.from(x, 'base64')
 declare module '*.wasm' {
-  const content: Buffer;
+  const content: string;
   export default content;
 }
