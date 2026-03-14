@@ -30,10 +30,18 @@ async function main() {
 
   // ─── Global error handler ──────────────────────────────────────────────────
   bot.catch((err: any, ctx) => {
-    console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
+    const msg: string = err?.message ?? '';
+
+    // Ignore stale callback queries — happens when bot restarts and processes
+    // button clicks that accumulated while it was offline (>30s old)
+    if (msg.includes('query is too old') || msg.includes('query ID is invalid')) {
+      return;
+    }
+
+    console.error(`❌ Bot error for ${ctx.updateType}:`, msg);
     console.error(err.stack);
     try {
-      ctx.reply(`❌ An error occurred: ${err.message}`);
+      ctx.reply(`❌ An error occurred: ${msg}`);
     } catch {}
   });
 
@@ -43,7 +51,9 @@ async function main() {
   });
 
   // ─── Launch ────────────────────────────────────────────────────────────────
-  await bot.launch();
+  // dropPendingUpdates: skip button clicks / messages that arrived while the
+  // bot was offline — prevents "query is too old" errors on every restart
+  await bot.launch({ dropPendingUpdates: true });
   console.log('🚀 Football Prediction Bot is running!');
   console.log(`👑 Admins: ${process.env.ADMIN_IDS}`);
   console.log(`👥 Target Group: ${process.env.TARGET_GROUP_ID}`);

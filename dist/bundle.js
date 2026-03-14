@@ -29174,17 +29174,21 @@ async function main() {
   registerAdminCommands(bot);
   registerUserCommands(bot);
   bot.catch((err, ctx) => {
-    console.error(`\u274C Bot error for ${ctx.updateType}:`, err.message);
+    const msg = err?.message ?? "";
+    if (msg.includes("query is too old") || msg.includes("query ID is invalid")) {
+      return;
+    }
+    console.error(`\u274C Bot error for ${ctx.updateType}:`, msg);
     console.error(err.stack);
     try {
-      ctx.reply(`\u274C An error occurred: ${err.message}`);
+      ctx.reply(`\u274C An error occurred: ${msg}`);
     } catch {
     }
   });
   import_node_cron.default.schedule("0 * * * *", () => {
     console.log(`\u{1F550} Bot heartbeat: ${(/* @__PURE__ */ new Date()).toISOString()}`);
   });
-  await bot.launch();
+  await bot.launch({ dropPendingUpdates: true });
   console.log("\u{1F680} Football Prediction Bot is running!");
   console.log(`\u{1F451} Admins: ${process.env.ADMIN_IDS}`);
   console.log(`\u{1F465} Target Group: ${process.env.TARGET_GROUP_ID}`);
