@@ -12,7 +12,13 @@ import { registerAdminCommands } from './adminCommands';
 // Writes every step to logs/startup.log AND console so you can diagnose
 // cPanel launch failures by checking the file even if stdout isn't captured.
 
-const LOG_DIR = process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+// Derive absolute path to the project root from process.argv[1] (the bundle path).
+// Under LiteSpeed FCGI, __dirname and cwd() point to the wrong directory, but
+// argv[1] is always the absolute path to the running script (dist/bundle.js).
+// We go up one level from dist/ to reach the project root.
+const BUNDLE_PATH = path.resolve(process.argv[1]);
+const PROJECT_ROOT = path.dirname(path.dirname(BUNDLE_PATH)); // dist/ -> project root
+const LOG_DIR = process.env.LOG_DIR || path.join(PROJECT_ROOT, 'logs');
 const STARTUP_LOG = path.join(LOG_DIR, 'startup.log');
 
 function slog(msg: string): void {

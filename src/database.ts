@@ -1,5 +1,9 @@
 import initSqlJs from 'sql.js';
 import type { Database } from 'sql.js';
+// WASM binary is embedded by esbuild (--loader:.wasm=binary).
+// This eliminates all file-path issues under cPanel/LiteSpeed where __dirname
+// and process.argv[1] point to the FastCGI wrapper dir, not our dist/ folder.
+import sqlWasm from 'sql.js/dist/sql-wasm.wasm';
 import path from 'path';
 import fs from 'fs';
 
@@ -75,12 +79,12 @@ function transaction(fn: () => void): void {
 
 export async function initDatabase(): Promise<void> {
   // Locate the WASM file next to the running script (works for both bundle and dev)
-  // __dirname in the esbuild bundle resolves to the directory of dist/bundle.js
-  // at runtime — this is more reliable than process.argv[1] under cPanel Passenger
-  // which may use a wrapper script as argv[1].
-  const SQL = await initSqlJs({
-    locateFile: (file: string) => path.join(__dirname, file)
-  });
+  // wasmBinary: pass the embedded binary directly — no file path needed at all.
+  // Under LiteSpeed/cPanel, __dirname and process.argv[1] both resolve to the
+  // FastCGI wrapper directory (/usr/local/lsws/fcgi-bin/), not our dist/ folder,
+  // so any locateFile approach would fail. Embedding the WASM in the bundle
+  // via esbuild --loader:.wasm=binary is the only reliable solution.
+  const SQL = await initSqlJs({ wasmBinary: sqlWasm });
 
   if (fs.existsSync(dbPath)) {
     const fileBuffer = fs.readFileSync(dbPath);

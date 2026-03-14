@@ -6,7 +6,8 @@ logs/
 .DS_Store
 *.db
 
-# Ignore all of dist/ except the pre-built bundle files
+# Ignore all of dist/ except the pre-built bundle
+# Note: sql-wasm.wasm is now embedded inside bundle.js (esbuild --loader:.wasm=binary)
+# so no separate WASM file is needed in dist/
 dist/*
 !dist/bundle.js
-!dist/sql-wasm.wasm

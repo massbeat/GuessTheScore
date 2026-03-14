@@ -4,7 +4,7 @@
   "description": "Telegram Football Prediction Bot",
   "main": "dist/index.js",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/bundle.js && node -e \"require('fs').copyFileSync('node_modules/sql.js/dist/sql-wasm.wasm', 'dist/sql-wasm.wasm')\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/bundle.js --loader:.wasm=binary",
     "start": "node dist/bundle.js",
     "dev": "ts-node src/index.ts"
   },
