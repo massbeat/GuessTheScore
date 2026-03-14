@@ -5125,12 +5125,12 @@ var require_url_state_machine = __commonJS({
         this.buffer += cStr;
       } else if (isNaN(c) || c === 47 || c === 63 || c === 35 || isSpecial(this.url) && c === 92 || this.stateOverride) {
         if (this.buffer !== "") {
-          const port = parseInt(this.buffer);
-          if (port > Math.pow(2, 16) - 1) {
+          const port2 = parseInt(this.buffer);
+          if (port2 > Math.pow(2, 16) - 1) {
             this.parseError = true;
             return failure;
           }
-          this.url.port = port === defaultPort(this.url.scheme) ? null : port;
+          this.url.port = port2 === defaultPort(this.url.scheme) ? null : port2;
           this.buffer = "";
         }
         if (this.stateOverride) {
@@ -5833,7 +5833,7 @@ var require_lib2 = __commonJS({
       return ex && typeof ex === "object" && "default" in ex ? ex["default"] : ex;
     }
     var Stream = _interopDefault(require("stream"));
-    var http3 = _interopDefault(require("http"));
+    var http4 = _interopDefault(require("http"));
     var Url = _interopDefault(require("url"));
     var whatwgUrl = _interopDefault(require_public_api());
     var https2 = _interopDefault(require("https"));
@@ -6573,7 +6573,7 @@ var require_lib2 = __commonJS({
       return headers;
     }
     var INTERNALS$1 = /* @__PURE__ */ Symbol("Response internals");
-    var STATUS_CODES = http3.STATUS_CODES;
+    var STATUS_CODES = http4.STATUS_CODES;
     var Response = class _Response {
       constructor() {
         let body = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : null;
@@ -6826,7 +6826,7 @@ var require_lib2 = __commonJS({
       return new fetch2.Promise(function(resolve, reject) {
         const request = new Request(url2, opts);
         const options = getNodeRequestOptions(request);
-        const send = (options.protocol === "https:" ? https2 : http3).request;
+        const send = (options.protocol === "https:" ? https2 : http4).request;
         const signal = request.signal;
         let response = null;
         const abort = function abort2() {
@@ -9199,7 +9199,7 @@ var require_telegraf = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.Telegraf = void 0;
     var crypto6 = __importStar(require("crypto"));
-    var http3 = __importStar(require("http"));
+    var http4 = __importStar(require("http"));
     var https2 = __importStar(require("https"));
     var composer_1 = require_composer();
     var compact_1 = require_compact();
@@ -9312,12 +9312,12 @@ var require_telegraf = __commonJS({
           await this.handleUpdate(update);
         });
       }
-      startWebhook(path3, tlsOptions, port, host, cb, secretToken) {
+      startWebhook(path3, tlsOptions, port2, host, cb, secretToken) {
         const webhookCb = this.webhookCallback(path3, { secretToken });
         const callback = typeof cb === "function" ? (req, res) => webhookCb(req, res, () => cb(req, res)) : webhookCb;
-        this.webhookServer = tlsOptions != null ? https2.createServer(tlsOptions, callback) : http3.createServer(callback);
-        this.webhookServer.listen(port, host, () => {
-          debug("Webhook listening on port: %s", port);
+        this.webhookServer = tlsOptions != null ? https2.createServer(tlsOptions, callback) : http4.createServer(callback);
+        this.webhookServer.listen(port2, host, () => {
+          debug("Webhook listening on port: %s", port2);
         });
         return this;
       }
@@ -9347,8 +9347,8 @@ var require_telegraf = __commonJS({
           domain: webhook.domain,
           path: (_b = webhook.path) !== null && _b !== void 0 ? _b : webhook.hookPath
         });
-        const { tlsOptions, port, host, cb, secretToken } = webhook;
-        this.startWebhook(domainOpts.path, tlsOptions, port, host, cb, secretToken);
+        const { tlsOptions, port: port2, host, cb, secretToken } = webhook;
+        this.startWebhook(domainOpts.path, tlsOptions, port2, host, cb, secretToken);
         await this.telegram.setWebhook(domainOpts.url, {
           drop_pending_updates,
           allowed_updates,
@@ -23266,7 +23266,7 @@ var require_form_data = __commonJS({
     var CombinedStream = require_combined_stream();
     var util3 = require("util");
     var path3 = require("path");
-    var http3 = require("http");
+    var http4 = require("http");
     var https2 = require("https");
     var parseUrl = require("url").parse;
     var fs3 = require("fs");
@@ -23538,7 +23538,7 @@ var require_form_data = __commonJS({
       if (options.protocol === "https:") {
         request = https2.request(options);
       } else {
-        request = http3.request(options);
+        request = http4.request(options);
       }
       this.getLength(function(err, length) {
         if (err && err !== "Unknown stream") {
@@ -23598,14 +23598,14 @@ var require_proxy_from_env = __commonJS({
       var parsedUrl = typeof url2 === "string" ? parseUrl(url2) : url2 || {};
       var proto = parsedUrl.protocol;
       var hostname = parsedUrl.host;
-      var port = parsedUrl.port;
+      var port2 = parsedUrl.port;
       if (typeof hostname !== "string" || !hostname || typeof proto !== "string") {
         return "";
       }
       proto = proto.split(":", 1)[0];
       hostname = hostname.replace(/:\d*$/, "");
-      port = parseInt(port) || DEFAULT_PORTS[proto] || 0;
-      if (!shouldProxy(hostname, port)) {
+      port2 = parseInt(port2) || DEFAULT_PORTS[proto] || 0;
+      if (!shouldProxy(hostname, port2)) {
         return "";
       }
       var proxy = getEnv("npm_config_" + proto + "_proxy") || getEnv(proto + "_proxy") || getEnv("npm_config_proxy") || getEnv("all_proxy");
@@ -23614,7 +23614,7 @@ var require_proxy_from_env = __commonJS({
       }
       return proxy;
     }
-    function shouldProxy(hostname, port) {
+    function shouldProxy(hostname, port2) {
       var NO_PROXY = (getEnv("npm_config_no_proxy") || getEnv("no_proxy")).toLowerCase();
       if (!NO_PROXY) {
         return true;
@@ -23629,7 +23629,7 @@ var require_proxy_from_env = __commonJS({
         var parsedProxy = proxy.match(/^(.+):(\d+)$/);
         var parsedProxyHostname = parsedProxy ? parsedProxy[1] : proxy;
         var parsedProxyPort = parsedProxy ? parseInt(parsedProxy[2]) : 0;
-        if (parsedProxyPort && parsedProxyPort !== port) {
+        if (parsedProxyPort && parsedProxyPort !== port2) {
           return true;
         }
         if (!/^[.*]/.test(parsedProxyHostname)) {
@@ -23673,7 +23673,7 @@ var require_follow_redirects = __commonJS({
   "node_modules/follow-redirects/index.js"(exports2, module2) {
     var url2 = require("url");
     var URL3 = url2.URL;
-    var http3 = require("http");
+    var http4 = require("http");
     var https2 = require("https");
     var Writable = require("stream").Writable;
     var assert = require("assert");
@@ -24159,7 +24159,7 @@ var require_follow_redirects = __commonJS({
     function isURL(value) {
       return URL3 && value instanceof URL3;
     }
-    module2.exports = wrap({ http: http3, https: https2 });
+    module2.exports = wrap({ http: http4, https: https2 });
     module2.exports.wrap = wrap;
   }
 });
@@ -24176,6 +24176,7 @@ var require_follow_redirects = __commonJS({
 })();
 
 // src/index.ts
+var import_http4 = __toESM(require("http"));
 var import_telegraf3 = __toESM(require_lib3());
 var import_node_cron = __toESM(require_node_cron());
 
@@ -24237,7 +24238,7 @@ function transaction(fn) {
 }
 async function initDatabase() {
   const SQL = await (0, import_sql.default)({
-    locateFile: (file) => import_path.default.join(import_path.default.dirname(process.argv[1]), file)
+    locateFile: (file) => import_path.default.join(__dirname, file)
   });
   if (import_fs.default.existsSync(dbPath)) {
     const fileBuffer = import_fs.default.readFileSync(dbPath);
@@ -29168,6 +29169,13 @@ for (const key of requiredEnvVars) {
     process.exit(1);
   }
 }
+var port = parseInt(process.env.PORT || "3000", 10);
+import_http4.default.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Football Prediction Bot is running\n");
+}).listen(port, () => {
+  console.log(`\u{1F310} HTTP server listening on port ${port} (required by Passenger)`);
+});
 async function main() {
   await initDatabase();
   const bot = new import_telegraf3.Telegraf(process.env.BOT_TOKEN);

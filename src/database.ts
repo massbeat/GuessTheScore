@@ -75,8 +75,11 @@ function transaction(fn: () => void): void {
 
 export async function initDatabase(): Promise<void> {
   // Locate the WASM file next to the running script (works for both bundle and dev)
+  // __dirname in the esbuild bundle resolves to the directory of dist/bundle.js
+  // at runtime — this is more reliable than process.argv[1] under cPanel Passenger
+  // which may use a wrapper script as argv[1].
   const SQL = await initSqlJs({
-    locateFile: (file: string) => path.join(path.dirname(process.argv[1]), file)
+    locateFile: (file: string) => path.join(__dirname, file)
   });
 
   if (fs.existsSync(dbPath)) {

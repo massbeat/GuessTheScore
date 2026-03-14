@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'http';
 import { Telegraf } from 'telegraf';
 import cron from 'node-cron';
 import { initDatabase } from './database';
@@ -14,6 +15,18 @@ for (const key of requiredEnvVars) {
     process.exit(1);
   }
 }
+
+// ─── HTTP server required by cPanel Passenger ─────────────────────────────────
+// cPanel runs Node.js apps via Phusion Passenger which expects an HTTP server
+// to start listening. Without this, Passenger kills the process after ~10s.
+// The PORT env var is set automatically by Passenger.
+const port = parseInt(process.env.PORT || '3000', 10);
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Football Prediction Bot is running\n');
+}).listen(port, () => {
+  console.log(`🌐 HTTP server listening on port ${port} (required by Passenger)`);
+});
 
 async function main() {
   // ─── Init DB ───────────────────────────────────────────────────────────────
