@@ -24243,6 +24243,37 @@ function transaction(fn) {
     throw err;
   }
 }
+function migrateToV2() {
+  const stmt = db.prepare("PRAGMA table_info(predictions)");
+  const cols = [];
+  while (stmt.step()) {
+    cols.push(stmt.getAsObject().name);
+  }
+  stmt.free();
+  if (cols.includes("group_id")) return;
+  console.log("\u{1F4E6} Migrating database to v2 (multi-group support)...");
+  db.exec(`
+    CREATE TABLE predictions_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_telegram_id INTEGER NOT NULL,
+      match_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL DEFAULT 0,
+      predicted_home_score INTEGER NOT NULL,
+      predicted_away_score INTEGER NOT NULL,
+      points_awarded INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_telegram_id, match_id, group_id)
+    );
+    INSERT OR IGNORE INTO predictions_new
+      (id, user_telegram_id, match_id, group_id, predicted_home_score, predicted_away_score, points_awarded, created_at, updated_at)
+    SELECT id, user_telegram_id, match_id, 0, predicted_home_score, predicted_away_score, points_awarded, created_at, updated_at
+    FROM predictions;
+    DROP TABLE predictions;
+    ALTER TABLE predictions_new RENAME TO predictions;
+  `);
+  console.log("\u2705 Migration v2 complete \u2014 existing predictions assigned to legacy group (id=0)");
+}
 async function initDatabase() {
   const wasmBinary = Buffer.from(sql_wasm_default, "base64");
   const SQL = await (0, import_sql.default)({ wasmBinary });
@@ -24274,20 +24305,40 @@ async function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Groups registered with the bot (auto-registered when bot is added)
+    CREATE TABLE IF NOT EXISTS groups (
+      group_id INTEGER PRIMARY KEY,
+      group_name TEXT,
+      is_active INTEGER DEFAULT 1,
+      registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Per-group membership and points (separate leaderboard per group)
+    CREATE TABLE IF NOT EXISTS group_members (
+      user_telegram_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      total_points INTEGER DEFAULT 0,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_telegram_id, group_id)
+    );
+
+    -- Predictions now include group_id for multi-competition support
     CREATE TABLE IF NOT EXISTS predictions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_telegram_id INTEGER NOT NULL,
       match_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL DEFAULT 0,
       predicted_home_score INTEGER NOT NULL,
       predicted_away_score INTEGER NOT NULL,
       points_awarded INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_telegram_id, match_id),
+      UNIQUE(user_telegram_id, match_id, group_id),
       FOREIGN KEY (user_telegram_id) REFERENCES users(telegram_id),
       FOREIGN KEY (match_id) REFERENCES matches(id)
     );
   `);
+  migrateToV2();
   saveDb();
   console.log("\u2705 Database initialized");
 }
@@ -24302,6 +24353,39 @@ function upsertUser(telegramId, username, firstName) {
 }
 function getUser(telegramId) {
   return get("SELECT * FROM users WHERE telegram_id = ?", [telegramId]);
+}
+function registerGroup(groupId, groupName) {
+  run(`
+    INSERT INTO groups (group_id, group_name, is_active)
+    VALUES (?, ?, 1)
+    ON CONFLICT(group_id) DO UPDATE SET
+      group_name = excluded.group_name,
+      is_active = 1
+  `, [groupId, groupName]);
+}
+function deactivateGroup(groupId) {
+  run("UPDATE groups SET is_active = 0 WHERE group_id = ?", [groupId]);
+}
+function getRegisteredGroups() {
+  return all("SELECT * FROM groups WHERE is_active = 1 ORDER BY registered_at ASC");
+}
+function joinGroup(telegramId, groupId) {
+  run(`
+    INSERT OR IGNORE INTO group_members (user_telegram_id, group_id)
+    VALUES (?, ?)
+  `, [telegramId, groupId]);
+}
+function getUserGroups(telegramId) {
+  return all(`
+    SELECT gm.group_id, gm.total_points, gm.joined_at, g.group_name, g.is_active
+    FROM group_members gm
+    JOIN groups g ON g.group_id = gm.group_id
+    WHERE gm.user_telegram_id = ? AND g.is_active = 1
+    ORDER BY gm.joined_at ASC
+  `, [telegramId]);
+}
+function hasAnyGroupMembership(telegramId) {
+  return getUserGroups(telegramId).length > 0;
 }
 function upsertMatch(match) {
   run(`
@@ -24331,24 +24415,24 @@ function setMatchResult(matchId, homeScore, awayScore) {
     UPDATE matches SET status = 'finished', actual_home_score = ?, actual_away_score = ? WHERE id = ?
   `, [homeScore, awayScore, matchId]);
 }
-function upsertPrediction(telegramId, matchId, homeScore, awayScore) {
+function upsertPrediction(telegramId, matchId, groupId, homeScore, awayScore) {
   const existing = get(`
     SELECT p.points_awarded, m.status
     FROM predictions p
     JOIN matches m ON p.match_id = m.id
-    WHERE p.user_telegram_id = ? AND p.match_id = ?
-  `, [telegramId, matchId]);
+    WHERE p.user_telegram_id = ? AND p.match_id = ? AND p.group_id = ?
+  `, [telegramId, matchId, groupId]);
   if (existing && (existing.status === "finished" || existing.points_awarded !== null)) {
     return false;
   }
   run(`
-    INSERT INTO predictions (user_telegram_id, match_id, predicted_home_score, predicted_away_score, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(user_telegram_id, match_id) DO UPDATE SET
+    INSERT INTO predictions (user_telegram_id, match_id, group_id, predicted_home_score, predicted_away_score, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(user_telegram_id, match_id, group_id) DO UPDATE SET
       predicted_home_score = excluded.predicted_home_score,
       predicted_away_score = excluded.predicted_away_score,
       updated_at = datetime('now')
-  `, [telegramId, matchId, homeScore, awayScore]);
+  `, [telegramId, matchId, groupId, homeScore, awayScore]);
   return true;
 }
 function getPredictionsForMatch(matchId) {
@@ -24369,43 +24453,76 @@ function getUserPredictions(telegramId) {
     LIMIT 20
   `, [telegramId]);
 }
-function awardPoints(predictionId, points, telegramId) {
+function awardPoints(predictionId, points, telegramId, groupId = 0) {
   transaction(() => {
     run(`UPDATE predictions SET points_awarded = ? WHERE id = ?`, [points, predictionId]);
     run(`UPDATE users SET total_points = total_points + ? WHERE telegram_id = ?`, [points, telegramId]);
+    if (groupId !== 0) {
+      run(`
+        UPDATE group_members SET total_points = total_points + ?
+        WHERE user_telegram_id = ? AND group_id = ?
+      `, [points, telegramId, groupId]);
+    }
   });
 }
-function getUnpredictedMatches(telegramId) {
+function getUnpredictedMatches(telegramId, groupId) {
   return all(`
     SELECT m.*
     FROM matches m
     WHERE m.status = 'active'
       AND m.id NOT IN (
-        SELECT match_id FROM predictions WHERE user_telegram_id = ?
+        SELECT match_id FROM predictions
+        WHERE user_telegram_id = ? AND group_id = ?
       )
     ORDER BY m.kickoff_time ASC
-  `, [telegramId]);
+  `, [telegramId, groupId]);
 }
-function getPredictedMatches(telegramId) {
+function getPredictedMatches(telegramId, groupId) {
   return all(`
     SELECT m.*, p.predicted_home_score, p.predicted_away_score
     FROM matches m
-    JOIN predictions p ON p.match_id = m.id AND p.user_telegram_id = ?
+    JOIN predictions p ON p.match_id = m.id AND p.user_telegram_id = ? AND p.group_id = ?
     WHERE m.status = 'active'
     ORDER BY m.kickoff_time ASC
-  `, [telegramId]);
+  `, [telegramId, groupId]);
 }
-function getLeaderboard(limit = 20) {
+function getGroupLeaderboard(groupId, limit = 20) {
+  return all(`
+    SELECT u.telegram_id, u.username, u.first_name, gm.total_points,
+           COUNT(p.id) AS prediction_count
+    FROM group_members gm
+    JOIN users u ON u.telegram_id = gm.user_telegram_id
+    LEFT JOIN predictions p ON p.user_telegram_id = gm.user_telegram_id
+                            AND p.group_id = gm.group_id
+                            AND p.points_awarded IS NOT NULL
+    WHERE gm.group_id = ?
+    GROUP BY gm.user_telegram_id
+    ORDER BY gm.total_points DESC
+    LIMIT ?
+  `, [groupId, limit]);
+}
+function getGlobalLeaderboard(limit = 20) {
   return all(`
     SELECT u.telegram_id, u.username, u.first_name, u.total_points,
-           COUNT(p.id) AS prediction_count
+           COUNT(DISTINCT p.id) AS prediction_count
     FROM users u
-    JOIN predictions p ON p.user_telegram_id = u.telegram_id
+    LEFT JOIN predictions p ON p.user_telegram_id = u.telegram_id AND p.points_awarded IS NOT NULL
+    WHERE u.total_points > 0
     GROUP BY u.telegram_id
-    HAVING prediction_count > 0
     ORDER BY u.total_points DESC
     LIMIT ?
   `, [limit]);
+}
+function getFinishedUnscoredMatches() {
+  return all(`
+    SELECT DISTINCT m.*
+    FROM matches m
+    JOIN predictions p ON p.match_id = m.id
+    WHERE m.status = 'finished'
+      AND m.actual_home_score IS NOT NULL
+      AND p.points_awarded IS NULL
+    ORDER BY m.kickoff_time ASC
+  `);
 }
 function clearAllScoresAndPredictions() {
   let usersReset = 0;
@@ -24413,6 +24530,7 @@ function clearAllScoresAndPredictions() {
   transaction(() => {
     predictionsDeleted = run(`DELETE FROM predictions`);
     usersReset = run(`UPDATE users SET total_points = 0`);
+    run(`UPDATE group_members SET total_points = 0`);
   });
   return { usersReset, predictionsDeleted };
 }
@@ -24432,7 +24550,7 @@ function resetFinishedMatches() {
   transaction(() => {
     for (const matchId of matchIds) {
       const predictions = all(`
-        SELECT user_telegram_id, points_awarded
+        SELECT user_telegram_id, group_id, points_awarded
         FROM predictions
         WHERE match_id = ? AND points_awarded IS NOT NULL
       `, [matchId]);
@@ -24441,6 +24559,13 @@ function resetFinishedMatches() {
           `UPDATE users SET total_points = MAX(0, total_points - ?) WHERE telegram_id = ?`,
           [pred.points_awarded, pred.user_telegram_id]
         );
+        if (pred.group_id !== 0) {
+          run(
+            `UPDATE group_members SET total_points = MAX(0, total_points - ?)
+               WHERE user_telegram_id = ? AND group_id = ?`,
+            [pred.points_awarded, pred.user_telegram_id, pred.group_id]
+          );
+        }
         pointsDeducted += pred.points_awarded;
       }
       predictionsCleared += run(`DELETE FROM predictions WHERE match_id = ?`, [matchId]);
@@ -24458,7 +24583,8 @@ var import_telegraf = __toESM(require_lib3());
 
 // src/helpers.ts
 var ADMIN_IDS = (process.env.ADMIN_IDS || "").split(",").map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
-var TARGET_GROUP_ID = process.env.TARGET_GROUP_ID ? parseInt(process.env.TARGET_GROUP_ID, 10) : null;
+var TARGET_GROUP_IDS = (process.env.TARGET_GROUP_ID || "").split(",").map((id) => parseInt(id.trim(), 10)).filter((id) => !isNaN(id));
+var TARGET_GROUP_ID = TARGET_GROUP_IDS[0] ?? null;
 function isAdmin(telegramId) {
   return ADMIN_IDS.includes(telegramId);
 }
@@ -24479,14 +24605,9 @@ function formatKickoff(kickoffTime) {
     timeZone: "UTC"
   }) + " UTC";
 }
-async function checkGroupMembership(ctx, telegramId) {
-  if (!TARGET_GROUP_ID) return true;
-  try {
-    const member = await ctx.telegram.getChatMember(TARGET_GROUP_ID, telegramId);
-    return ["member", "administrator", "creator"].includes(member.status);
-  } catch {
-    return false;
-  }
+function checkGroupMembership(telegramId) {
+  if (TARGET_GROUP_IDS.length === 0) return true;
+  return hasAnyGroupMembership(telegramId);
 }
 function displayName(user) {
   return user.username ? `@${user.username}` : user.first_name || `User${user.telegram_id}`;
@@ -24519,7 +24640,7 @@ var USER_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>!
 \u{1F4CB} /missing \u2014 Matches you haven't predicted yet
 \u2705 /mypicks \u2014 Your current predictions
 \u{1F4CA} /mystats \u2014 Your points &amp; prediction history
-\u{1F3C6} /leaderboard \u2014 Top 20 players
+\u{1F3C6} /leaderboard \u2014 Group &amp; global leaderboard
 \u2753 /help \u2014 Show this message
 
 <b>\u{1F3C6} Scoring:</b>
@@ -24538,7 +24659,7 @@ var ADMIN_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>! You have <b>admin
 \u{1F4CB} /missing \u2014 Matches you haven't predicted yet
 \u2705 /mypicks \u2014 Your current predictions
 \u{1F4CA} /mystats \u2014 Your points &amp; prediction history
-\u{1F3C6} /leaderboard \u2014 Top 20 players
+\u{1F3C6} /leaderboard \u2014 Group &amp; global leaderboard
 \u2753 /help \u2014 Show this help
 
 <b>\u{1F451} Admin Commands:</b>
@@ -24550,8 +24671,10 @@ var ADMIN_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>! You have <b>admin
 
 <b>\u{1F5C2} Managing active matches:</b>
 \u2022 /admin_active \u2014 List currently active matches
+\u2022 /admin_groups \u2014 List registered groups
 
 <b>\u2705 Finalizing results:</b>
+\u2022 /admin_finalize_all \u2014 Score all finished unscored matches
 \u2022 /admin_update &lt;match_id&gt; \u2014 Fetch score from API &amp; award points
 \u2022 /admin_manual_score &lt;match_id&gt; &lt;home&gt;-&lt;away&gt; \u2014 Set score manually
   e.g. <code>/admin_manual_score 12345 2-1</code>
@@ -24569,61 +24692,315 @@ var ADMIN_HELP = (name) => `\u{1F44B} Welcome, <b>${name}</b>! You have <b>admin
 
 \u2615 <b>Enjoying the bot?</b> <a href="https://buymeacoffee.com/massbeat">Buy me a coffee!</a>`;
 function registerUserCommands(bot) {
-  bot.command("start", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied. You must be a member of the competition group to use this bot.");
-    upsertUser(user.id, user.username, user.first_name);
-    const name = escapeHtml(user.first_name);
-    const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML", disable_web_page_preview: true });
-  });
-  bot.command("help", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
-    upsertUser(user.id, user.username, user.first_name);
-    const name = escapeHtml(user.first_name);
-    const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
-    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML", disable_web_page_preview: true });
-  });
-  bot.command("matches", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
+  const isGroupChat = (ctx) => ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+  const getChatGroupId = (ctx) => ctx.chat.id;
+  const getChatGroupName = (ctx) => ctx.chat?.title || `Group ${ctx.chat?.id}`;
+  function autoRegisterGroupAndUser(ctx, userId, username, firstName) {
+    const groupId = getChatGroupId(ctx);
+    const groupName = getChatGroupName(ctx);
+    registerGroup(groupId, groupName);
+    upsertUser(userId, username, firstName);
+    joinGroup(userId, groupId);
+  }
+  async function resolveGroupForDM(ctx, userId, action) {
+    const groups = getUserGroups(userId);
+    if (groups.length === 0) {
+      await ctx.reply(
+        `\u{1F6AB} You are not a member of any competition group.
+
+Ask an admin to invite you to a group where this bot is active, then use /start in that group.`
+      );
+      return null;
+    }
+    if (groups.length === 1) return groups[0].group_id;
+    const buttons = groups.map((g) => [
+      import_telegraf.Markup.button.callback(
+        `\u{1F3C6} ${escapeHtml(g.group_name || `Group ${g.group_id}`)}`,
+        `gsel_${g.group_id}_${action}`
+      )
+    ]);
+    await ctx.reply(
+      `\u{1F3C6} <b>Select Competition</b>
+
+You're in ${groups.length} competitions. Which one?`,
+      { parse_mode: "HTML", ...import_telegraf.Markup.inlineKeyboard(buttons) }
+    );
+    return null;
+  }
+  async function showMatchesForGroup(ctx, userId, groupId) {
     const matches = getActiveMatches();
-    if (matches.length === 0) return sendPrivate(ctx, user.id, "\u{1F4ED} No matches are currently open for prediction.");
-    await sendPrivate(ctx, user.id, `\u26BD <b>Open Matches</b>
-Click a match to submit your prediction:`, { parse_mode: "HTML" });
+    if (matches.length === 0) {
+      await sendPrivate(ctx, userId, "\u{1F4ED} No matches are currently open for prediction.");
+      return;
+    }
+    await sendPrivate(
+      ctx,
+      userId,
+      `\u26BD <b>Open Matches</b>
+Click a match to submit your prediction:`,
+      { parse_mode: "HTML" }
+    );
     for (const m of matches) {
       const locked = isMatchLocked(m.kickoff_time);
       const matchInfo = `${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
 \u{1F4C5} ${formatKickoff(m.kickoff_time)}
 \u{1F3C6} ${escapeHtml(m.league)}`;
       if (locked) {
-        await sendPrivate(ctx, user.id, matchInfo + "\n<i>Predictions locked</i>", { parse_mode: "HTML" });
+        await sendPrivate(ctx, userId, matchInfo + "\n<i>Predictions locked</i>", { parse_mode: "HTML" });
       } else {
-        await sendPrivate(ctx, user.id, matchInfo, {
+        await sendPrivate(ctx, userId, matchInfo, {
           parse_mode: "HTML",
           ...import_telegraf.Markup.inlineKeyboard([
-            [import_telegraf.Markup.button.callback(`\u{1F3AF} Predict this match`, `predict_${m.id}`)]
+            [import_telegraf.Markup.button.callback(`\u{1F3AF} Predict`, `predict_${m.id}_${groupId}`)]
           ])
         });
       }
     }
+  }
+  async function showMissingForGroup(ctx, userId, groupId) {
+    const matches = getUnpredictedMatches(userId, groupId);
+    if (matches.length === 0) {
+      await sendPrivate(ctx, userId, "\u2705 You're all caught up! You've predicted every active match.");
+      return;
+    }
+    await sendPrivate(
+      ctx,
+      userId,
+      `\u{1F4CB} <b>Matches Without Your Prediction (${matches.length})</b>
+Click a match to predict:`,
+      { parse_mode: "HTML" }
+    );
+    for (const m of matches) {
+      const locked = isMatchLocked(m.kickoff_time);
+      const matchInfo = `${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
+\u{1F4C5} ${formatKickoff(m.kickoff_time)}
+\u{1F3C6} ${escapeHtml(m.league)}`;
+      if (locked) {
+        await sendPrivate(ctx, userId, matchInfo + "\n<i>Predictions locked</i>", { parse_mode: "HTML" });
+      } else {
+        await sendPrivate(ctx, userId, matchInfo, {
+          parse_mode: "HTML",
+          ...import_telegraf.Markup.inlineKeyboard([
+            [import_telegraf.Markup.button.callback(`\u{1F3AF} Predict`, `predict_${m.id}_${groupId}`)]
+          ])
+        });
+      }
+    }
+  }
+  async function showPicksForGroup(ctx, userId, groupId) {
+    const matches = getPredictedMatches(userId, groupId);
+    if (matches.length === 0) {
+      await sendPrivate(ctx, userId, "\u{1F4ED} You haven't predicted any active matches yet. Use /matches to get started!");
+      return;
+    }
+    let text = `\u2705 <b>Your Predictions (${matches.length} active matches)</b>
+`;
+    for (const m of matches) {
+      const locked = isMatchLocked(m.kickoff_time);
+      text += `
+${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
+`;
+      text += `   \u{1F4C5} ${formatKickoff(m.kickoff_time)}
+`;
+      text += `   \u{1F3AF} Your pick: <b>${m.predicted_home_score} - ${m.predicted_away_score}</b>`;
+      text += locked ? "" : "  <i>(editable)</i>";
+      text += "\n";
+    }
+    await sendPrivate(ctx, userId, text, { parse_mode: "HTML" });
+  }
+  async function sendLeaderboardMessage(ctx, board, title) {
+    if (board.length === 0) {
+      await ctx.reply("\u{1F3C6} No scores yet. Be the first to predict!");
+      return;
+    }
+    const medals = ["\u{1F947}", "\u{1F948}", "\u{1F949}"];
+    let text = `\u{1F3C6} <b>${title} (Top ${board.length})</b>
+
+`;
+    board.forEach((u, i) => {
+      const medal = medals[i] ?? `${i + 1}.`;
+      text += `${medal} ${escapeHtml(displayName(u))} \u2014 <b>${u.total_points} pts</b>
+`;
+    });
+    await ctx.reply(text, { parse_mode: "HTML" });
+  }
+  bot.command("start", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      const groupName = getChatGroupName(ctx);
+      const name = escapeHtml(user.first_name);
+      await ctx.reply(
+        `\u26BD <b>${name}</b> joined the prediction game for <b>${escapeHtml(groupName)}</b>!
+
+Use /matches to see open fixtures and submit predictions.
+You can also DM me directly for a private chat.`,
+        { parse_mode: "HTML" }
+      );
+    } else {
+      upsertUser(user.id, user.username, user.first_name);
+      const name = escapeHtml(user.first_name);
+      if (!isAdmin(user.id) && !checkGroupMembership(user.id)) {
+        await ctx.reply(
+          `\u{1F44B} Hi <b>${name}</b>!
+
+\u{1F6AB} <b>Access Denied</b>
+
+You must join a group where this bot is active and use /start there first.`,
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
+      const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
+      await ctx.reply(msg, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    }
   });
-  bot.action(/^predict_(\d+)$/, async (ctx) => {
+  bot.command("help", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+    } else {
+      upsertUser(user.id, user.username, user.first_name);
+      if (!isAdmin(user.id) && !checkGroupMembership(user.id)) {
+        return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied. Join a competition group first.");
+      }
+    }
+    const name = escapeHtml(user.first_name);
+    const msg = isAdmin(user.id) ? ADMIN_HELP(name) : USER_HELP(name);
+    await sendPrivate(ctx, user.id, msg, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+  });
+  bot.command("matches", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      await showMatchesForGroup(ctx, user.id, getChatGroupId(ctx));
+    } else {
+      const groupId = await resolveGroupForDM(ctx, user.id, "matches");
+      if (groupId !== null) await showMatchesForGroup(ctx, user.id, groupId);
+    }
+  });
+  bot.command("missing", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      await showMissingForGroup(ctx, user.id, getChatGroupId(ctx));
+    } else {
+      const groupId = await resolveGroupForDM(ctx, user.id, "missing");
+      if (groupId !== null) await showMissingForGroup(ctx, user.id, groupId);
+    }
+  });
+  bot.command("mypicks", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      await showPicksForGroup(ctx, user.id, getChatGroupId(ctx));
+    } else {
+      const groupId = await resolveGroupForDM(ctx, user.id, "mypicks");
+      if (groupId !== null) await showPicksForGroup(ctx, user.id, groupId);
+    }
+  });
+  bot.command("leaderboard", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      const groupId = getChatGroupId(ctx);
+      const groupName = getChatGroupName(ctx);
+      const board = getGroupLeaderboard(groupId);
+      await sendLeaderboardMessage(ctx, board, `${escapeHtml(groupName)} Leaderboard`);
+    } else {
+      const board = getGlobalLeaderboard(20);
+      await sendLeaderboardMessage(ctx, board, "Global Leaderboard");
+      const groups = getUserGroups(user.id);
+      if (groups.length > 1) {
+        const buttons = groups.map((g) => [
+          import_telegraf.Markup.button.callback(
+            `\u{1F3C6} ${escapeHtml(g.group_name || `Group ${g.group_id}`)}`,
+            `gsel_${g.group_id}_leaderboard`
+          )
+        ]);
+        await ctx.reply("\u{1F4CA} View group-specific leaderboard:", import_telegraf.Markup.inlineKeyboard(buttons));
+      } else if (groups.length === 1) {
+        const board2 = getGroupLeaderboard(groups[0].group_id);
+        const gname = groups[0].group_name || `Group ${groups[0].group_id}`;
+        await sendLeaderboardMessage(ctx, board2, `${escapeHtml(gname)} Leaderboard`);
+      }
+    }
+  });
+  bot.command("mystats", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    const dbUser = getUser(user.id);
+    if (!dbUser) return ctx.reply("You haven't played yet. Use /start in a group to register!");
+    const groups = getUserGroups(user.id);
+    const predictions = getUserPredictions(user.id);
+    const name = escapeHtml(displayName({ username: user.username, first_name: user.first_name, telegram_id: user.id }));
+    let text = `\u{1F4CA} <b>Stats for ${name}</b>
+
+`;
+    text += `\u{1F30D} Total Points (Global): <b>${dbUser.total_points}</b>
+`;
+    if (groups.length > 0) {
+      text += `
+<b>Points by Competition:</b>
+`;
+      for (const g of groups) {
+        text += `\u2022 ${escapeHtml(g.group_name || `Group ${g.group_id}`)}: <b>${g.total_points} pts</b>
+`;
+      }
+    }
+    text += `
+<b>Recent Predictions:</b>
+`;
+    if (predictions.length === 0) {
+      text += "<i>No predictions yet. Use /matches to get started!</i>";
+    } else {
+      for (const p of predictions) {
+        const status = p.status === "finished" ? `${p.actual_home_score}-${p.actual_away_score} | <b>${p.points_awarded ?? "?"} pts</b>` : "<i>Pending...</i>";
+        text += `
+\u2022 <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>
+`;
+        text += `  Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | Result: ${status}
+`;
+      }
+    }
+    await ctx.reply(text, { parse_mode: "HTML" });
+  });
+  bot.action(/^gsel_(-?\d+)_(\w+)$/, async (ctx) => {
+    const user = ctx.from;
+    if (!user) return ctx.answerCbQuery();
+    await ctx.answerCbQuery();
+    const groupId = parseInt(ctx.match[1], 10);
+    const action = ctx.match[2];
+    if (action === "matches") {
+      await showMatchesForGroup(ctx, user.id, groupId);
+    } else if (action === "missing") {
+      await showMissingForGroup(ctx, user.id, groupId);
+    } else if (action === "mypicks") {
+      await showPicksForGroup(ctx, user.id, groupId);
+    } else if (action === "leaderboard") {
+      const board = getGroupLeaderboard(groupId);
+      await sendLeaderboardMessage(ctx, board, `Group Leaderboard`);
+    }
+  });
+  bot.action(/^predict_(\d+)_(-?\d+)$/, async (ctx) => {
     const user = ctx.from;
     if (!user) return ctx.answerCbQuery();
     const matchId = parseInt(ctx.match[1], 10);
+    const groupId = parseInt(ctx.match[2], 10);
     const match = getMatch(matchId);
     if (!match) return ctx.answerCbQuery("\u274C Match not found");
     if (match.status !== "active") return ctx.answerCbQuery("\u274C Match is not open for predictions");
     if (isMatchLocked(match.kickoff_time)) return ctx.answerCbQuery("\u{1F512} Predictions are locked for this match");
-    pendingPrediction.set(user.id, matchId);
+    pendingPrediction.set(user.id, { matchId, groupId });
     await ctx.answerCbQuery();
     await sendPrivate(
       ctx,
@@ -24631,7 +25008,7 @@ Click a match to submit your prediction:`, { parse_mode: "HTML" });
       `\u{1F3AF} <b>Predict: ${escapeHtml(match.home_team)} vs ${escapeHtml(match.away_team)}</b>
 \u{1F4C5} ${formatKickoff(match.kickoff_time)}
 
-Type your predicted score in the format:
+Type your predicted score:
 <code>home-away</code>  (e.g. <code>2-1</code> or <code>0-0</code>)
 
 <i>Type /cancel to cancel</i>`,
@@ -24651,15 +25028,18 @@ Type your predicted score in the format:
   bot.command("predict", async (ctx) => {
     const user = ctx.from;
     if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
+    if (!isAdmin(user.id) && !checkGroupMembership(user.id)) {
+      return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
+    }
     upsertUser(user.id, user.username, user.first_name);
     const args = ctx.message.text.split(" ").slice(1);
     if (args.length < 2) {
-      const matches = getActiveMatches();
-      if (matches.length === 0) return sendPrivate(ctx, user.id, "\u{1F4ED} No matches are currently open for prediction.");
-      await sendPrivate(ctx, user.id, "Use /matches to see open fixtures and predict via buttons, or use:\n<code>/predict &lt;match_id&gt; &lt;home&gt;-&lt;away&gt;</code>", { parse_mode: "HTML" });
-      return;
+      return sendPrivate(
+        ctx,
+        user.id,
+        "Use /matches to predict via buttons, or:\n<code>/predict &lt;match_id&gt; &lt;home&gt;-&lt;away&gt;</code>",
+        { parse_mode: "HTML" }
+      );
     }
     const matchId = parseInt(args[0], 10);
     const scoreParts = args[1].split("-");
@@ -24675,7 +25055,14 @@ Type your predicted score in the format:
     if (!match) return sendPrivate(ctx, user.id, `\u274C Match #${matchId} not found.`);
     if (match.status !== "active") return sendPrivate(ctx, user.id, `\u274C Match #${matchId} is not open for predictions.`);
     if (isMatchLocked(match.kickoff_time)) return sendPrivate(ctx, user.id, `\u{1F512} Predictions for this match are locked.`);
-    upsertPrediction(user.id, matchId, homeScore, awayScore);
+    let groupId = 0;
+    if (isGroupChat(ctx)) {
+      groupId = getChatGroupId(ctx);
+    } else {
+      const groups = getUserGroups(user.id);
+      if (groups.length === 1) groupId = groups[0].group_id;
+    }
+    upsertPrediction(user.id, matchId, groupId, homeScore, awayScore);
     await sendPrivate(
       ctx,
       user.id,
@@ -24687,110 +25074,14 @@ Type your predicted score in the format:
       { parse_mode: "HTML" }
     );
   });
-  bot.command("missing", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
-    upsertUser(user.id, user.username, user.first_name);
-    const matches = getUnpredictedMatches(user.id);
-    if (matches.length === 0) return sendPrivate(ctx, user.id, "\u2705 You're all caught up! You've predicted every active match.");
-    await sendPrivate(ctx, user.id, `\u{1F4CB} <b>Matches Without Your Prediction (${matches.length})</b>
-Click a match to submit your prediction:`, { parse_mode: "HTML" });
-    for (const m of matches) {
-      const locked = isMatchLocked(m.kickoff_time);
-      const matchInfo = `${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
-\u{1F4C5} ${formatKickoff(m.kickoff_time)}
-\u{1F3C6} ${escapeHtml(m.league)}`;
-      if (locked) {
-        await sendPrivate(ctx, user.id, matchInfo + "\n<i>Predictions locked</i>", { parse_mode: "HTML" });
-      } else {
-        await sendPrivate(ctx, user.id, matchInfo, {
-          parse_mode: "HTML",
-          ...import_telegraf.Markup.inlineKeyboard([
-            [import_telegraf.Markup.button.callback(`\u{1F3AF} Predict this match`, `predict_${m.id}`)]
-          ])
-        });
-      }
-    }
-  });
-  bot.command("mypicks", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return sendPrivate(ctx, user.id, "\u{1F6AB} Access Denied.");
-    upsertUser(user.id, user.username, user.first_name);
-    const matches = getPredictedMatches(user.id);
-    if (matches.length === 0) return sendPrivate(ctx, user.id, "\u{1F4ED} You haven't predicted any active matches yet. Use /matches to get started!");
-    let text = `\u2705 <b>Your Predictions (${matches.length} active matches)</b>
-`;
-    for (const m of matches) {
-      const locked = isMatchLocked(m.kickoff_time);
-      text += `
-${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
-`;
-      text += `   \u{1F4C5} ${formatKickoff(m.kickoff_time)}
-`;
-      text += `   \u{1F3AF} Your pick: <b>${m.predicted_home_score} - ${m.predicted_away_score}</b>`;
-      text += locked ? "" : "  <i>(editable)</i>";
-      text += "\n";
-    }
-    await sendPrivate(ctx, user.id, text, { parse_mode: "HTML" });
-  });
-  bot.command("mystats", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return ctx.reply("\u{1F6AB} Access Denied.");
-    const dbUser = getUser(user.id);
-    if (!dbUser) return ctx.reply("You haven't played yet. Use /start to register!");
-    const predictions = getUserPredictions(user.id);
-    const name = escapeHtml(displayName({ username: user.username, first_name: user.first_name, telegram_id: user.id }));
-    let text = `\u{1F4CA} <b>Stats for ${name}</b>
-
-\u{1F3C6} Total Points: <b>${dbUser.total_points}</b>
-
-<b>Recent Predictions:</b>
-`;
-    if (predictions.length === 0) {
-      text += "<i>No predictions yet. Use /matches to get started!</i>";
-    } else {
-      for (const p of predictions) {
-        const status = p.status === "finished" ? `${p.actual_home_score}-${p.actual_away_score} | <b>${p.points_awarded ?? "?"} pts</b>` : "<i>Pending...</i>";
-        text += `
-\u2022 <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>
-`;
-        text += `  Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | Result: ${status}
-`;
-      }
-    }
-    await ctx.reply(text, { parse_mode: "HTML" });
-  });
-  bot.command("leaderboard", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    const isMember = await checkGroupMembership(ctx, user.id);
-    if (!isMember) return ctx.reply("\u{1F6AB} Access Denied.");
-    const board = getLeaderboard(20);
-    if (board.length === 0) return ctx.reply("\u{1F3C6} No scores yet. Be the first to predict!");
-    const medals = ["\u{1F947}", "\u{1F948}", "\u{1F949}"];
-    let text = `\u{1F3C6} <b>Leaderboard (Top ${board.length})</b>
-
-`;
-    board.forEach((u, i) => {
-      const medal = medals[i] ?? `${i + 1}.`;
-      text += `${medal} ${escapeHtml(displayName(u))} \u2014 <b>${u.total_points} pts</b>
-`;
-    });
-    await ctx.reply(text, { parse_mode: "HTML" });
-  });
   bot.on("text", async (ctx) => {
     const user = ctx.from;
     if (!user) return;
     if (!pendingPrediction.has(user.id)) return;
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
-    const matchId = pendingPrediction.get(user.id);
+    const pending = pendingPrediction.get(user.id);
+    const { matchId, groupId } = pending;
     const match = getMatch(matchId);
     if (!match) {
       pendingPrediction.delete(user.id);
@@ -24820,8 +25111,11 @@ ${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeH
       );
     }
     upsertUser(user.id, user.username, user.first_name);
-    upsertPrediction(user.id, matchId, homeScore, awayScore);
+    const saved = upsertPrediction(user.id, matchId, groupId, homeScore, awayScore);
     pendingPrediction.delete(user.id);
+    if (!saved) {
+      return sendPrivate(ctx, user.id, "\u26A0\uFE0F This match has already been finalized. Prediction not saved.");
+    }
     await sendPrivate(
       ctx,
       user.id,
@@ -29135,6 +29429,78 @@ Use /admin_active or /admin_fetch to re-activate matches.`,
     await ctx.answerCbQuery("Cancelled");
     await ctx.editMessageText("\u274C Reset finished matches cancelled.");
   });
+  bot.command("admin_finalize_all", adminOnly, async (ctx) => {
+    const matches = getFinishedUnscoredMatches();
+    if (matches.length === 0) {
+      return ctx.reply(
+        `\u2705 <b>All caught up!</b>
+
+No finished matches with unscored predictions found.`,
+        { parse_mode: "HTML" }
+      );
+    }
+    await ctx.reply(`\u23F3 Scoring ${matches.length} finished match(es)...`);
+    let totalMatchesScored = 0;
+    let totalPredictionsScored = 0;
+    let resultText = `\u2705 <b>Batch Scoring Complete!</b>
+
+`;
+    for (const match of matches) {
+      const predictions = getPredictionsForMatch(match.id);
+      let scoredCount = 0;
+      for (const pred of predictions) {
+        if (pred.points_awarded !== null && pred.points_awarded !== void 0) continue;
+        const points = calculatePoints(
+          pred.predicted_home_score,
+          pred.predicted_away_score,
+          match.actual_home_score,
+          match.actual_away_score
+        );
+        awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
+        scoredCount++;
+      }
+      if (scoredCount > 0) {
+        totalMatchesScored++;
+        totalPredictionsScored += scoredCount;
+        resultText += `\u26BD <b>${escapeHtml(match.home_team)} ${match.actual_home_score}\u2013${match.actual_away_score} ${escapeHtml(match.away_team)}</b>
+   ${scoredCount} prediction(s) scored
+
+`;
+      }
+    }
+    logAdminAction(
+      ctx.from.id,
+      "FINALIZE_ALL",
+      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored}`
+    );
+    resultText += `\u{1F4CA} <b>Summary:</b>
+\u2022 ${totalMatchesScored} match(es) scored
+\u2022 ${totalPredictionsScored} prediction(s) awarded points`;
+    await ctx.reply(resultText, { parse_mode: "HTML" });
+  });
+  bot.command("admin_groups", adminOnly, async (ctx) => {
+    const groups = getRegisteredGroups();
+    if (groups.length === 0) {
+      return ctx.reply(
+        `\u{1F4ED} No groups registered yet.
+
+Groups are auto-registered when the bot is added to a group or when a user runs /start there.`
+      );
+    }
+    let text = `\u{1F4CB} <b>Registered Groups (${groups.length})</b>
+
+`;
+    for (const g of groups) {
+      text += `\u2022 <b>${escapeHtml(g.group_name || "Unknown")}</b>
+`;
+      text += `  ID: <code>${g.group_id}</code>
+`;
+      text += `  Registered: ${g.registered_at ?? "N/A"}
+
+`;
+    }
+    await ctx.reply(text, { parse_mode: "HTML" });
+  });
 }
 async function finalizeMatch(ctx, matchId, homeScore, awayScore, match) {
   setMatchResult(matchId, homeScore, awayScore);
@@ -29157,7 +29523,7 @@ async function finalizeMatch(ctx, matchId, homeScore, awayScore, match) {
         continue;
       }
       const points = calculatePoints(pred.predicted_home_score, pred.predicted_away_score, homeScore, awayScore);
-      awardPoints(pred.id, points, pred.user_telegram_id);
+      awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
       const name = pred.username ? `@${escapeHtml(pred.username)}` : escapeHtml(pred.first_name);
       text += `
 \u2022 ${name}: <b>${pred.predicted_home_score}-${pred.predicted_away_score}</b> \u2192 ${pointsLabel(points)} (<b>${points} pts</b>)`;
@@ -29237,8 +29603,34 @@ async function main() {
     slog(err.stack ?? "(no stack)");
     process.exit(1);
   }
+  if (TARGET_GROUP_IDS.length > 0) {
+    for (const gid of TARGET_GROUP_IDS) {
+      registerGroup(gid, `Group ${gid}`);
+      slog(`\u{1F4E5} Pre-registered group from env: ${gid}`);
+    }
+  } else {
+    slog("\u2139\uFE0F  No TARGET_GROUP_ID configured \u2014 groups will auto-register when bot is added.");
+  }
   slog("Creating Telegraf bot instance...");
   const bot = new import_telegraf3.Telegraf(process.env.BOT_TOKEN);
+  bot.on("my_chat_member", (ctx) => {
+    try {
+      const update = ctx.update.my_chat_member;
+      const chat = update.chat;
+      if (chat.type !== "group" && chat.type !== "supergroup") return;
+      const newStatus = update.new_chat_member.status;
+      const title = chat.title || `Group ${chat.id}`;
+      if (newStatus === "member" || newStatus === "administrator") {
+        registerGroup(chat.id, title);
+        slog(`\u{1F4E5} Bot added to group: ${title} (${chat.id})`);
+      } else if (newStatus === "kicked" || newStatus === "left") {
+        deactivateGroup(chat.id);
+        slog(`\u{1F6AB} Bot removed from group: ${title} (${chat.id})`);
+      }
+    } catch (err) {
+      slog(`\u26A0\uFE0F  my_chat_member handler error: ${err.message}`);
+    }
+  });
   slog("Registering admin commands...");
   registerAdminCommands(bot);
   slog("Registering user commands...");

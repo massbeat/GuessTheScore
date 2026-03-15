@@ -1,13 +1,19 @@
 import { Context } from 'telegraf';
+import { hasAnyGroupMembership } from './database';
 
 export const ADMIN_IDS: number[] = (process.env.ADMIN_IDS || '')
   .split(',')
   .map((id) => parseInt(id.trim(), 10))
   .filter((id) => !isNaN(id));
 
-export const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID
-  ? parseInt(process.env.TARGET_GROUP_ID, 10)
-  : null;
+// All configured group IDs (comma-separated in TARGET_GROUP_ID env var)
+export const TARGET_GROUP_IDS: number[] = (process.env.TARGET_GROUP_ID || '')
+  .split(',')
+  .map((id) => parseInt(id.trim(), 10))
+  .filter((id) => !isNaN(id));
+
+// Kept for backward compatibility
+export const TARGET_GROUP_ID = TARGET_GROUP_IDS[0] ?? null;
 
 export function isAdmin(telegramId: number): boolean {
   return ADMIN_IDS.includes(telegramId);
@@ -38,15 +44,14 @@ export function formatMatchLine(match: any): string {
   return `${lockIcon} [${match.id}] ${match.home_team} vs ${match.away_team}\n   📅 ${formatKickoff(match.kickoff_time)}\n   🏆 ${match.league}`;
 }
 
-export async function checkGroupMembership(ctx: Context, telegramId: number): Promise<boolean> {
-  if (!TARGET_GROUP_ID) return true; // If not configured, allow everyone
-
-  try {
-    const member = await ctx.telegram.getChatMember(TARGET_GROUP_ID, telegramId);
-    return ['member', 'administrator', 'creator'].includes(member.status);
-  } catch {
-    return false;
-  }
+/**
+ * DB-based membership check: returns true if the user has joined at least one
+ * registered group (or if no groups are configured at all).
+ * Replaces the old async Telegram API call.
+ */
+export function checkGroupMembership(telegramId: number): boolean {
+  if (TARGET_GROUP_IDS.length === 0) return true; // No groups configured → open access
+  return hasAnyGroupMembership(telegramId);
 }
 
 export function displayName(user: any): string {

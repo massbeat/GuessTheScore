@@ -1,15 +1,12 @@
 import initSqlJs from 'sql.js';
 import type { Database } from 'sql.js';
-// WASM binary is embedded by esbuild (--loader:.wasm=binary).
-// This eliminates all file-path issues under cPanel/LiteSpeed where __dirname
-// and process.argv[1] point to the FastCGI wrapper dir, not our dist/ folder.
+// WASM binary embedded by esbuild (--loader:.wasm=base64)
 import sqlWasm from 'sql.js/dist/sql-wasm.wasm';
 import path from 'path';
 import fs from 'fs';
 
 const dbPath = process.env.DB_PATH || './data/predictions.db';
 
-// Ensure directory exists
 const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
@@ -20,14 +17,12 @@ let inTransaction = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Save in-memory database to disk (skipped mid-transaction)
 function saveDb(): void {
   if (inTransaction) return;
   const data = db.export();
   fs.writeFileSync(dbPath, Buffer.from(data));
 }
 
-// Execute SQL with params, return number of rows modified
 function run(sql: string, params: any[] = []): number {
   db.run(sql, params);
   const changes = db.getRowsModified();
@@ -35,31 +30,24 @@ function run(sql: string, params: any[] = []): number {
   return changes;
 }
 
-// Get a single row as an object (or null)
 function get(sql: string, params: any[] = []): any {
   const stmt = db.prepare(sql);
   stmt.bind(params);
   let row: any = null;
-  if (stmt.step()) {
-    row = stmt.getAsObject();
-  }
+  if (stmt.step()) { row = stmt.getAsObject(); }
   stmt.free();
   return row;
 }
 
-// Get all rows as an array of objects
 function all(sql: string, params: any[] = []): any[] {
   const stmt = db.prepare(sql);
   stmt.bind(params);
   const rows: any[] = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
-  }
+  while (stmt.step()) { rows.push(stmt.getAsObject()); }
   stmt.free();
   return rows;
 }
 
-// Wrap multiple operations in a single atomic transaction
 function transaction(fn: () => void): void {
   inTransaction = true;
   db.run('BEGIN');
@@ -75,17 +63,46 @@ function transaction(fn: () => void): void {
   }
 }
 
+// ─── Migration: v1 → v2 (adds group_id to predictions) ───────────────────────
+
+function migrateToV2(): void {
+  // Check if group_id column already exists
+  const stmt = db.prepare('PRAGMA table_info(predictions)');
+  const cols: string[] = [];
+  while (stmt.step()) {
+    cols.push(stmt.getAsObject().name as string);
+  }
+  stmt.free();
+
+  if (cols.includes('group_id')) return; // Already v2
+
+  console.log('📦 Migrating database to v2 (multi-group support)...');
+  db.exec(`
+    CREATE TABLE predictions_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_telegram_id INTEGER NOT NULL,
+      match_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL DEFAULT 0,
+      predicted_home_score INTEGER NOT NULL,
+      predicted_away_score INTEGER NOT NULL,
+      points_awarded INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_telegram_id, match_id, group_id)
+    );
+    INSERT OR IGNORE INTO predictions_new
+      (id, user_telegram_id, match_id, group_id, predicted_home_score, predicted_away_score, points_awarded, created_at, updated_at)
+    SELECT id, user_telegram_id, match_id, 0, predicted_home_score, predicted_away_score, points_awarded, created_at, updated_at
+    FROM predictions;
+    DROP TABLE predictions;
+    ALTER TABLE predictions_new RENAME TO predictions;
+  `);
+  console.log('✅ Migration v2 complete — existing predictions assigned to legacy group (id=0)');
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 export async function initDatabase(): Promise<void> {
-  // Locate the WASM file next to the running script (works for both bundle and dev)
-  // wasmBinary: pass the embedded binary directly — no file path needed at all.
-  // Under LiteSpeed/cPanel, __dirname and process.argv[1] both resolve to the
-  // FastCGI wrapper directory (/usr/local/lsws/fcgi-bin/), not our dist/ folder,
-  // so any locateFile approach would fail. Embedding the WASM in the bundle
-  // via esbuild --loader:.wasm=binary is the only reliable solution.
-  // sqlWasm is a base64 string (esbuild --loader:.wasm=base64).
-  // Decode with Buffer.from() — works on all Node.js versions unlike Uint8Array.fromBase64.
   const wasmBinary = Buffer.from(sqlWasm, 'base64');
   const SQL = await initSqlJs({ wasmBinary: wasmBinary as unknown as ArrayBuffer });
 
@@ -118,20 +135,42 @@ export async function initDatabase(): Promise<void> {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Groups registered with the bot (auto-registered when bot is added)
+    CREATE TABLE IF NOT EXISTS groups (
+      group_id INTEGER PRIMARY KEY,
+      group_name TEXT,
+      is_active INTEGER DEFAULT 1,
+      registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Per-group membership and points (separate leaderboard per group)
+    CREATE TABLE IF NOT EXISTS group_members (
+      user_telegram_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      total_points INTEGER DEFAULT 0,
+      joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_telegram_id, group_id)
+    );
+
+    -- Predictions now include group_id for multi-competition support
     CREATE TABLE IF NOT EXISTS predictions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_telegram_id INTEGER NOT NULL,
       match_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL DEFAULT 0,
       predicted_home_score INTEGER NOT NULL,
       predicted_away_score INTEGER NOT NULL,
       points_awarded INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_telegram_id, match_id),
+      UNIQUE(user_telegram_id, match_id, group_id),
       FOREIGN KEY (user_telegram_id) REFERENCES users(telegram_id),
       FOREIGN KEY (match_id) REFERENCES matches(id)
     );
   `);
+
+  // Migrate existing installations from v1 schema
+  migrateToV2();
 
   saveDb();
   console.log('✅ Database initialized');
@@ -151,6 +190,54 @@ export function upsertUser(telegramId: number, username: string | undefined, fir
 
 export function getUser(telegramId: number) {
   return get('SELECT * FROM users WHERE telegram_id = ?', [telegramId]);
+}
+
+// ─── Group queries ────────────────────────────────────────────────────────────
+
+export function registerGroup(groupId: number, groupName: string): void {
+  run(`
+    INSERT INTO groups (group_id, group_name, is_active)
+    VALUES (?, ?, 1)
+    ON CONFLICT(group_id) DO UPDATE SET
+      group_name = excluded.group_name,
+      is_active = 1
+  `, [groupId, groupName]);
+}
+
+export function deactivateGroup(groupId: number): void {
+  run('UPDATE groups SET is_active = 0 WHERE group_id = ?', [groupId]);
+}
+
+export function isRegisteredGroup(groupId: number): boolean {
+  const row = get('SELECT group_id FROM groups WHERE group_id = ? AND is_active = 1', [groupId]);
+  return row !== null;
+}
+
+export function getRegisteredGroups(): any[] {
+  return all('SELECT * FROM groups WHERE is_active = 1 ORDER BY registered_at ASC');
+}
+
+// ─── Group membership ─────────────────────────────────────────────────────────
+
+export function joinGroup(telegramId: number, groupId: number): void {
+  run(`
+    INSERT OR IGNORE INTO group_members (user_telegram_id, group_id)
+    VALUES (?, ?)
+  `, [telegramId, groupId]);
+}
+
+export function getUserGroups(telegramId: number): any[] {
+  return all(`
+    SELECT gm.group_id, gm.total_points, gm.joined_at, g.group_name, g.is_active
+    FROM group_members gm
+    JOIN groups g ON g.group_id = gm.group_id
+    WHERE gm.user_telegram_id = ? AND g.is_active = 1
+    ORDER BY gm.joined_at ASC
+  `, [telegramId]);
+}
+
+export function hasAnyGroupMembership(telegramId: number): boolean {
+  return getUserGroups(telegramId).length > 0;
 }
 
 // ─── Match queries ────────────────────────────────────────────────────────────
@@ -204,29 +291,29 @@ export function setMatchResult(matchId: number, homeScore: number, awayScore: nu
 export function upsertPrediction(
   telegramId: number,
   matchId: number,
+  groupId: number,
   homeScore: number,
   awayScore: number
 ): boolean {
-  // Prevent updating predictions for finished matches or those already scored
   const existing = get(`
     SELECT p.points_awarded, m.status
     FROM predictions p
     JOIN matches m ON p.match_id = m.id
-    WHERE p.user_telegram_id = ? AND p.match_id = ?
-  `, [telegramId, matchId]);
+    WHERE p.user_telegram_id = ? AND p.match_id = ? AND p.group_id = ?
+  `, [telegramId, matchId, groupId]);
 
   if (existing && (existing.status === 'finished' || existing.points_awarded !== null)) {
     return false;
   }
 
   run(`
-    INSERT INTO predictions (user_telegram_id, match_id, predicted_home_score, predicted_away_score, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(user_telegram_id, match_id) DO UPDATE SET
+    INSERT INTO predictions (user_telegram_id, match_id, group_id, predicted_home_score, predicted_away_score, updated_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(user_telegram_id, match_id, group_id) DO UPDATE SET
       predicted_home_score = excluded.predicted_home_score,
       predicted_away_score = excluded.predicted_away_score,
       updated_at = datetime('now')
-  `, [telegramId, matchId, homeScore, awayScore]);
+  `, [telegramId, matchId, groupId, homeScore, awayScore]);
   return true;
 }
 
@@ -250,52 +337,98 @@ export function getUserPredictions(telegramId: number) {
   `, [telegramId]);
 }
 
-export function awardPoints(predictionId: number, points: number, telegramId: number): void {
+export function awardPoints(
+  predictionId: number,
+  points: number,
+  telegramId: number,
+  groupId: number = 0
+): void {
   transaction(() => {
     run(`UPDATE predictions SET points_awarded = ? WHERE id = ?`, [points, predictionId]);
     run(`UPDATE users SET total_points = total_points + ? WHERE telegram_id = ?`, [points, telegramId]);
+    // Update per-group points if this prediction belongs to a real group
+    if (groupId !== 0) {
+      run(`
+        UPDATE group_members SET total_points = total_points + ?
+        WHERE user_telegram_id = ? AND group_id = ?
+      `, [points, telegramId, groupId]);
+    }
   });
 }
 
-// ─── Unpredicted matches ──────────────────────────────────────────────────────
+// ─── Unpredicted / predicted matches per group ────────────────────────────────
 
-export function getUnpredictedMatches(telegramId: number) {
+export function getUnpredictedMatches(telegramId: number, groupId: number) {
   return all(`
     SELECT m.*
     FROM matches m
     WHERE m.status = 'active'
       AND m.id NOT IN (
-        SELECT match_id FROM predictions WHERE user_telegram_id = ?
+        SELECT match_id FROM predictions
+        WHERE user_telegram_id = ? AND group_id = ?
       )
     ORDER BY m.kickoff_time ASC
-  `, [telegramId]);
+  `, [telegramId, groupId]);
 }
 
-// ─── Predicted matches (active matches user already predicted) ────────────────
-
-export function getPredictedMatches(telegramId: number) {
+export function getPredictedMatches(telegramId: number, groupId: number) {
   return all(`
     SELECT m.*, p.predicted_home_score, p.predicted_away_score
     FROM matches m
-    JOIN predictions p ON p.match_id = m.id AND p.user_telegram_id = ?
+    JOIN predictions p ON p.match_id = m.id AND p.user_telegram_id = ? AND p.group_id = ?
     WHERE m.status = 'active'
     ORDER BY m.kickoff_time ASC
-  `, [telegramId]);
+  `, [telegramId, groupId]);
 }
 
-// ─── Leaderboard ──────────────────────────────────────────────────────────────
+// ─── Leaderboards ─────────────────────────────────────────────────────────────
 
-export function getLeaderboard(limit = 20) {
+/** Per-group leaderboard using group_members.total_points */
+export function getGroupLeaderboard(groupId: number, limit = 20) {
+  return all(`
+    SELECT u.telegram_id, u.username, u.first_name, gm.total_points,
+           COUNT(p.id) AS prediction_count
+    FROM group_members gm
+    JOIN users u ON u.telegram_id = gm.user_telegram_id
+    LEFT JOIN predictions p ON p.user_telegram_id = gm.user_telegram_id
+                            AND p.group_id = gm.group_id
+                            AND p.points_awarded IS NOT NULL
+    WHERE gm.group_id = ?
+    GROUP BY gm.user_telegram_id
+    ORDER BY gm.total_points DESC
+    LIMIT ?
+  `, [groupId, limit]);
+}
+
+/** Global leaderboard using users.total_points (sum across all groups) */
+export function getGlobalLeaderboard(limit = 20) {
   return all(`
     SELECT u.telegram_id, u.username, u.first_name, u.total_points,
-           COUNT(p.id) AS prediction_count
+           COUNT(DISTINCT p.id) AS prediction_count
     FROM users u
-    JOIN predictions p ON p.user_telegram_id = u.telegram_id
+    LEFT JOIN predictions p ON p.user_telegram_id = u.telegram_id AND p.points_awarded IS NOT NULL
+    WHERE u.total_points > 0
     GROUP BY u.telegram_id
-    HAVING prediction_count > 0
     ORDER BY u.total_points DESC
     LIMIT ?
   `, [limit]);
+}
+
+// Alias kept for backward compat with any callers
+export const getLeaderboard = getGlobalLeaderboard;
+
+// ─── Admin: finished unscored matches (for batch finalize) ───────────────────
+
+export function getFinishedUnscoredMatches() {
+  return all(`
+    SELECT DISTINCT m.*
+    FROM matches m
+    JOIN predictions p ON p.match_id = m.id
+    WHERE m.status = 'finished'
+      AND m.actual_home_score IS NOT NULL
+      AND p.points_awarded IS NULL
+    ORDER BY m.kickoff_time ASC
+  `);
 }
 
 // ─── Admin: clear all scores and predictions ──────────────────────────────────
@@ -307,6 +440,7 @@ export function clearAllScoresAndPredictions(): { usersReset: number; prediction
   transaction(() => {
     predictionsDeleted = run(`DELETE FROM predictions`);
     usersReset = run(`UPDATE users SET total_points = 0`);
+    run(`UPDATE group_members SET total_points = 0`);
   });
 
   return { usersReset, predictionsDeleted };
@@ -339,7 +473,7 @@ export function resetFinishedMatches(): { matchesReset: number; predictionsClear
   transaction(() => {
     for (const matchId of matchIds) {
       const predictions = all(`
-        SELECT user_telegram_id, points_awarded
+        SELECT user_telegram_id, group_id, points_awarded
         FROM predictions
         WHERE match_id = ? AND points_awarded IS NOT NULL
       `, [matchId]);
@@ -347,6 +481,11 @@ export function resetFinishedMatches(): { matchesReset: number; predictionsClear
       for (const pred of predictions) {
         run(`UPDATE users SET total_points = MAX(0, total_points - ?) WHERE telegram_id = ?`,
           [pred.points_awarded, pred.user_telegram_id]);
+        if (pred.group_id !== 0) {
+          run(`UPDATE group_members SET total_points = MAX(0, total_points - ?)
+               WHERE user_telegram_id = ? AND group_id = ?`,
+            [pred.points_awarded, pred.user_telegram_id, pred.group_id]);
+        }
         pointsDeducted += pred.points_awarded;
       }
 

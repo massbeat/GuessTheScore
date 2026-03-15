@@ -12,6 +12,8 @@ import {
   deactivateAllMatches,
   getFinishedMatches,
   resetFinishedMatches,
+  getFinishedUnscoredMatches,
+  getRegisteredGroups,
 } from './database';
 import { fetchCompetitions, fetchFixturesByCompetition, fetchMatchById } from './footballApi';
 import { isAdmin, formatKickoff, escapeHtml } from './helpers';
@@ -472,6 +474,81 @@ export function registerAdminCommands(bot: Telegraf): void {
     await ctx.answerCbQuery('Cancelled');
     await ctx.editMessageText('❌ Reset finished matches cancelled.');
   });
+
+  // ─── /admin_finalize_all — batch score all finished unscored matches ──────
+  bot.command('admin_finalize_all', adminOnly, async (ctx) => {
+    const matches = getFinishedUnscoredMatches();
+
+    if (matches.length === 0) {
+      return ctx.reply(
+        `✅ <b>All caught up!</b>\n\nNo finished matches with unscored predictions found.`,
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    await ctx.reply(`⏳ Scoring ${matches.length} finished match(es)...`);
+
+    let totalMatchesScored = 0;
+    let totalPredictionsScored = 0;
+    let resultText = `✅ <b>Batch Scoring Complete!</b>\n\n`;
+
+    for (const match of matches) {
+      const predictions = getPredictionsForMatch(match.id);
+      let scoredCount = 0;
+
+      for (const pred of predictions) {
+        if (pred.points_awarded !== null && pred.points_awarded !== undefined) continue;
+        const points = calculatePoints(
+          pred.predicted_home_score,
+          pred.predicted_away_score,
+          match.actual_home_score,
+          match.actual_away_score
+        );
+        awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
+        scoredCount++;
+      }
+
+      if (scoredCount > 0) {
+        totalMatchesScored++;
+        totalPredictionsScored += scoredCount;
+        resultText +=
+          `⚽ <b>${escapeHtml(match.home_team)} ${match.actual_home_score}–${match.actual_away_score} ${escapeHtml(match.away_team)}</b>\n` +
+          `   ${scoredCount} prediction(s) scored\n\n`;
+      }
+    }
+
+    logAdminAction(
+      ctx.from!.id,
+      'FINALIZE_ALL',
+      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored}`
+    );
+
+    resultText +=
+      `📊 <b>Summary:</b>\n` +
+      `• ${totalMatchesScored} match(es) scored\n` +
+      `• ${totalPredictionsScored} prediction(s) awarded points`;
+
+    await ctx.reply(resultText, { parse_mode: 'HTML' });
+  });
+
+  // ─── /admin_groups — list registered groups ───────────────────────────────
+  bot.command('admin_groups', adminOnly, async (ctx) => {
+    const groups = getRegisteredGroups();
+    if (groups.length === 0) {
+      return ctx.reply(
+        `📭 No groups registered yet.\n\n` +
+        `Groups are auto-registered when the bot is added to a group or when a user runs /start there.`
+      );
+    }
+
+    let text = `📋 <b>Registered Groups (${groups.length})</b>\n\n`;
+    for (const g of groups) {
+      text += `• <b>${escapeHtml(g.group_name || 'Unknown')}</b>\n`;
+      text += `  ID: <code>${g.group_id}</code>\n`;
+      text += `  Registered: ${g.registered_at ?? 'N/A'}\n\n`;
+    }
+    await ctx.reply(text, { parse_mode: 'HTML' });
+  });
 }
 
 // ─── Shared finalize logic ────────────────────────────────────────────────────
@@ -503,7 +580,7 @@ async function finalizeMatch(
         continue;
       }
       const points = calculatePoints(pred.predicted_home_score, pred.predicted_away_score, homeScore, awayScore);
-      awardPoints(pred.id, points, pred.user_telegram_id);
+      awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
       const name = pred.username ? `@${escapeHtml(pred.username)}` : escapeHtml(pred.first_name);
       text += `\n• ${name}: <b>${pred.predicted_home_score}-${pred.predicted_away_score}</b> → ${pointsLabel(points)} (<b>${points} pts</b>)`;
     }

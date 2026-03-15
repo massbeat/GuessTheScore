@@ -4,9 +4,10 @@ import path from 'path';
 import http from 'http';
 import { Telegraf } from 'telegraf';
 import cron from 'node-cron';
-import { initDatabase } from './database';
+import { initDatabase, registerGroup, deactivateGroup } from './database';
 import { registerUserCommands } from './userCommands';
 import { registerAdminCommands } from './adminCommands';
+import { TARGET_GROUP_IDS } from './helpers';
 
 // ─── Startup logger ───────────────────────────────────────────────────────────
 // Writes every step to logs/startup.log AND console so you can diagnose
@@ -102,8 +103,40 @@ async function main() {
     process.exit(1);
   }
 
+  // Auto-register groups from TARGET_GROUP_ID env var so they work immediately
+  if (TARGET_GROUP_IDS.length > 0) {
+    for (const gid of TARGET_GROUP_IDS) {
+      registerGroup(gid, `Group ${gid}`);
+      slog(`📥 Pre-registered group from env: ${gid}`);
+    }
+  } else {
+    slog('ℹ️  No TARGET_GROUP_ID configured — groups will auto-register when bot is added.');
+  }
+
   slog('Creating Telegraf bot instance...');
   const bot = new Telegraf(process.env.BOT_TOKEN!);
+
+  // ─── Auto-register/deregister groups when bot membership changes ──────────
+  bot.on('my_chat_member', (ctx) => {
+    try {
+      const update = ctx.update.my_chat_member;
+      const chat = update.chat;
+      if (chat.type !== 'group' && chat.type !== 'supergroup') return;
+
+      const newStatus = update.new_chat_member.status;
+      const title = (chat as any).title || `Group ${chat.id}`;
+
+      if (newStatus === 'member' || newStatus === 'administrator') {
+        registerGroup(chat.id, title);
+        slog(`📥 Bot added to group: ${title} (${chat.id})`);
+      } else if (newStatus === 'kicked' || newStatus === 'left') {
+        deactivateGroup(chat.id);
+        slog(`🚫 Bot removed from group: ${title} (${chat.id})`);
+      }
+    } catch (err: any) {
+      slog(`⚠️  my_chat_member handler error: ${err.message}`);
+    }
+  });
 
   slog('Registering admin commands...');
   registerAdminCommands(bot);
