@@ -163,20 +163,43 @@ async function main() {
     slog(`🕐 Heartbeat: bot is alive`);
   });
 
-  // ─── Launch bot ──────────────────────────────────────────────────────────
+  // ─── Launch bot (with 409 retry) ─────────────────────────────────────────
+  // When cPanel restarts, the old process may still be polling Telegram for a
+  // few seconds after the new one starts. bot.launch() returns 409 in that
+  // window. Instead of dying immediately, we retry up to 5 times with a 6s
+  // delay — the old instance is guaranteed to be gone within ~8s (2s SIGTERM
+  // timeout + network round-trip). If all retries fail we exit so cPanel can
+  // surface the real error.
+  const MAX_LAUNCH_RETRIES = 5;
+  const LAUNCH_RETRY_DELAY_MS = 6000;
+
   slog('Launching Telegraf (dropPendingUpdates=true)...');
-  try {
-    await bot.launch({ dropPendingUpdates: true });
+  let launched = false;
+  for (let attempt = 1; attempt <= MAX_LAUNCH_RETRIES; attempt++) {
+    try {
+      await bot.launch({ dropPendingUpdates: true });
+      launched = true;
+      break;
+    } catch (err: any) {
+      const is409 = err.message?.includes('409');
+      if (is409 && attempt < MAX_LAUNCH_RETRIES) {
+        slog(`⚠️  409 Conflict (attempt ${attempt}/${MAX_LAUNCH_RETRIES}) — old instance still stopping. Retrying in ${LAUNCH_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS));
+      } else {
+        slog(`❌ bot.launch() failed (attempt ${attempt}): ${err.message}`);
+        slog(err.stack ?? '(no stack)');
+        process.exit(1);
+      }
+    }
+  }
+
+  if (launched) {
     slog('✅ Bot launched and polling Telegram API.');
     slog(`👑 Admins     : ${process.env.ADMIN_IDS}`);
     slog(`👥 Group      : ${process.env.TARGET_GROUP_ID}`);
     slog(`🗄️  DB path    : ${process.env.DB_PATH ?? './data/predictions.db'}`);
     slog(`📁 Log dir    : ${LOG_DIR}`);
     slog('🚀 Football Prediction Bot is running!');
-  } catch (err: any) {
-    slog(`❌ bot.launch() failed: ${err.message}`);
-    slog(err.stack ?? '(no stack)');
-    process.exit(1);
   }
 
   // ─── Graceful shutdown ───────────────────────────────────────────────────
@@ -188,7 +211,7 @@ async function main() {
     setTimeout(() => {
       slog('Process exiting.');
       process.exit(0);
-    }, 2000);
+    }, 4000);
   };
 
   process.once('SIGINT',  () => shutdown('SIGINT'));
