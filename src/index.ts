@@ -163,48 +163,12 @@ async function main() {
     slog(`🕐 Heartbeat: bot is alive`);
   });
 
-  // ─── Launch bot (with 409 retry) ─────────────────────────────────────────
-  // When cPanel restarts, the old process may still be polling Telegram for a
-  // few seconds after the new one starts. bot.launch() returns 409 in that
-  // window. Instead of dying immediately, we retry up to 5 times with a 6s
-  // delay — the old instance is guaranteed to be gone within ~8s (2s SIGTERM
-  // timeout + network round-trip). If all retries fail we exit so cPanel can
-  // surface the real error.
-  const MAX_LAUNCH_RETRIES = 5;
-  const LAUNCH_RETRY_DELAY_MS = 6000;
-
-  slog('Launching Telegraf (dropPendingUpdates=true)...');
-  let launched = false;
-  for (let attempt = 1; attempt <= MAX_LAUNCH_RETRIES; attempt++) {
-    try {
-      await bot.launch({ dropPendingUpdates: true });
-      launched = true;
-      break;
-    } catch (err: any) {
-      const is409 = err.message?.includes('409');
-      if (is409 && attempt < MAX_LAUNCH_RETRIES) {
-        slog(`⚠️  409 Conflict (attempt ${attempt}/${MAX_LAUNCH_RETRIES}) — old instance still stopping. Retrying in ${LAUNCH_RETRY_DELAY_MS / 1000}s...`);
-        await new Promise(resolve => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS));
-      } else {
-        slog(`❌ bot.launch() failed (attempt ${attempt}): ${err.message}`);
-        slog(err.stack ?? '(no stack)');
-        process.exit(1);
-      }
-    }
-  }
-
-  if (launched) {
-    slog('✅ Bot launched and polling Telegram API.');
-    slog(`👑 Admins     : ${process.env.ADMIN_IDS}`);
-    slog(`👥 Group      : ${process.env.TARGET_GROUP_ID}`);
-    slog(`🗄️  DB path    : ${process.env.DB_PATH ?? './data/predictions.db'}`);
-    slog(`📁 Log dir    : ${LOG_DIR}`);
-    slog('🚀 Football Prediction Bot is running!');
-  }
-
   // ─── Graceful shutdown ───────────────────────────────────────────────────
-  // process.exit() is required because node-cron keeps the event loop alive
-  // after bot.stop(), causing cPanel to see a zombie that never fully exits.
+  // MUST be registered BEFORE bot.launch(). Since `await bot.launch()` never
+  // returns during normal operation (it blocks until the bot stops), any code
+  // placed after it never executes — including SIGTERM/SIGINT handlers.
+  // Without this, Node.js default behaviour kills the process immediately on
+  // SIGTERM with no graceful cleanup, causing 409 conflicts on the next start.
   const shutdown = (signal: string) => {
     slog(`⚠️  Received ${signal}, shutting down gracefully...`);
     bot.stop(signal);
@@ -213,9 +177,45 @@ async function main() {
       process.exit(0);
     }, 4000);
   };
-
   process.once('SIGINT',  () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
+
+  // ─── Launch bot (with 409 retry) ─────────────────────────────────────────
+  // Runs as a background IIFE so main() can return and the SIGTERM handlers
+  // above remain active. When cPanel restarts, the old process may still be
+  // polling Telegram for a few seconds — we retry up to 5 times with a 6s
+  // delay. The old process exits within 4s (SIGTERM timeout), so attempt 2
+  // or 3 always succeeds.
+  const MAX_LAUNCH_RETRIES = 5;
+  const LAUNCH_RETRY_DELAY_MS = 6000;
+
+  slog('Launching Telegraf (dropPendingUpdates=true)...');
+  (async () => {
+    for (let attempt = 1; attempt <= MAX_LAUNCH_RETRIES; attempt++) {
+      try {
+        await bot.launch({ dropPendingUpdates: true });
+        slog('✅ Bot polling stopped (graceful shutdown complete).');
+        return;
+      } catch (err: any) {
+        const is409 = err.message?.includes('409');
+        if (is409 && attempt < MAX_LAUNCH_RETRIES) {
+          slog(`⚠️  409 Conflict (attempt ${attempt}/${MAX_LAUNCH_RETRIES}) — old instance still stopping. Retrying in ${LAUNCH_RETRY_DELAY_MS / 1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS));
+        } else {
+          slog(`❌ bot.launch() failed (attempt ${attempt}/${MAX_LAUNCH_RETRIES}): ${err.message}`);
+          slog(err.stack ?? '(no stack)');
+          process.exit(1);
+        }
+      }
+    }
+  })();
+
+  slog('✅ Bot is launching (SIGTERM/SIGINT handlers active).');
+  slog(`👑 Admins     : ${process.env.ADMIN_IDS}`);
+  slog(`👥 Groups     : ${process.env.TARGET_GROUP_ID}`);
+  slog(`🗄️  DB path    : ${process.env.DB_PATH ?? './data/predictions.db (relative — set absolute path in cPanel!)'}`);
+  slog(`📁 Log dir    : ${LOG_DIR}`);
+  slog('🚀 Football Prediction Bot started.');
 }
 
 main().catch(err => {

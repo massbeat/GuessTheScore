@@ -29650,35 +29650,6 @@ async function main() {
   import_node_cron.default.schedule("0 * * * *", () => {
     slog(`\u{1F550} Heartbeat: bot is alive`);
   });
-  const MAX_LAUNCH_RETRIES = 5;
-  const LAUNCH_RETRY_DELAY_MS = 6e3;
-  slog("Launching Telegraf (dropPendingUpdates=true)...");
-  let launched = false;
-  for (let attempt = 1; attempt <= MAX_LAUNCH_RETRIES; attempt++) {
-    try {
-      await bot.launch({ dropPendingUpdates: true });
-      launched = true;
-      break;
-    } catch (err) {
-      const is409 = err.message?.includes("409");
-      if (is409 && attempt < MAX_LAUNCH_RETRIES) {
-        slog(`\u26A0\uFE0F  409 Conflict (attempt ${attempt}/${MAX_LAUNCH_RETRIES}) \u2014 old instance still stopping. Retrying in ${LAUNCH_RETRY_DELAY_MS / 1e3}s...`);
-        await new Promise((resolve) => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS));
-      } else {
-        slog(`\u274C bot.launch() failed (attempt ${attempt}): ${err.message}`);
-        slog(err.stack ?? "(no stack)");
-        process.exit(1);
-      }
-    }
-  }
-  if (launched) {
-    slog("\u2705 Bot launched and polling Telegram API.");
-    slog(`\u{1F451} Admins     : ${process.env.ADMIN_IDS}`);
-    slog(`\u{1F465} Group      : ${process.env.TARGET_GROUP_ID}`);
-    slog(`\u{1F5C4}\uFE0F  DB path    : ${process.env.DB_PATH ?? "./data/predictions.db"}`);
-    slog(`\u{1F4C1} Log dir    : ${LOG_DIR2}`);
-    slog("\u{1F680} Football Prediction Bot is running!");
-  }
   const shutdown = (signal) => {
     slog(`\u26A0\uFE0F  Received ${signal}, shutting down gracefully...`);
     bot.stop(signal);
@@ -29689,6 +29660,34 @@ async function main() {
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
+  const MAX_LAUNCH_RETRIES = 5;
+  const LAUNCH_RETRY_DELAY_MS = 6e3;
+  slog("Launching Telegraf (dropPendingUpdates=true)...");
+  (async () => {
+    for (let attempt = 1; attempt <= MAX_LAUNCH_RETRIES; attempt++) {
+      try {
+        await bot.launch({ dropPendingUpdates: true });
+        slog("\u2705 Bot polling stopped (graceful shutdown complete).");
+        return;
+      } catch (err) {
+        const is409 = err.message?.includes("409");
+        if (is409 && attempt < MAX_LAUNCH_RETRIES) {
+          slog(`\u26A0\uFE0F  409 Conflict (attempt ${attempt}/${MAX_LAUNCH_RETRIES}) \u2014 old instance still stopping. Retrying in ${LAUNCH_RETRY_DELAY_MS / 1e3}s...`);
+          await new Promise((resolve) => setTimeout(resolve, LAUNCH_RETRY_DELAY_MS));
+        } else {
+          slog(`\u274C bot.launch() failed (attempt ${attempt}/${MAX_LAUNCH_RETRIES}): ${err.message}`);
+          slog(err.stack ?? "(no stack)");
+          process.exit(1);
+        }
+      }
+    }
+  })();
+  slog("\u2705 Bot is launching (SIGTERM/SIGINT handlers active).");
+  slog(`\u{1F451} Admins     : ${process.env.ADMIN_IDS}`);
+  slog(`\u{1F465} Groups     : ${process.env.TARGET_GROUP_ID}`);
+  slog(`\u{1F5C4}\uFE0F  DB path    : ${process.env.DB_PATH ?? "./data/predictions.db (relative \u2014 set absolute path in cPanel!)"}`);
+  slog(`\u{1F4C1} Log dir    : ${LOG_DIR2}`);
+  slog("\u{1F680} Football Prediction Bot started.");
 }
 main().catch((err) => {
   slog(`\u{1F4A5} Fatal error in main(): ${err.message}`);
