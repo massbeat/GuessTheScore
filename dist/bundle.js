@@ -29635,6 +29635,28 @@ async function main() {
   registerAdminCommands(bot);
   slog("Registering user commands...");
   registerUserCommands(bot);
+  slog("Registering bot commands with Telegram...");
+  try {
+    await bot.telegram.setMyCommands([
+      { command: "start", description: "Join the prediction game" },
+      { command: "matches", description: "View open fixtures & make predictions" },
+      { command: "missing", description: "Matches you haven't predicted yet" },
+      { command: "mypicks", description: "Your current predictions" },
+      { command: "mystats", description: "Your points & prediction history" },
+      { command: "leaderboard", description: "Group & global leaderboard" },
+      { command: "help", description: "Show all available commands" }
+    ], { scope: { type: "all_private_chats" } });
+    await bot.telegram.setMyCommands([
+      { command: "start", description: "Join the prediction game" },
+      { command: "matches", description: "View open fixtures & predict" },
+      { command: "leaderboard", description: "Group leaderboard" },
+      { command: "mystats", description: "Your stats & points" },
+      { command: "help", description: "Show all available commands" }
+    ], { scope: { type: "all_group_chats" } });
+    slog("\u2705 Bot commands registered with Telegram.");
+  } catch (err) {
+    slog(`\u26A0\uFE0F  setMyCommands failed (non-fatal): ${err.message}`);
+  }
   bot.catch((err, ctx) => {
     const msg = err?.message ?? "";
     if (msg.includes("query is too old") || msg.includes("query ID is invalid")) {

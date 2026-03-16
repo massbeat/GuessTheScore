@@ -144,6 +144,34 @@ async function main() {
   slog('Registering user commands...');
   registerUserCommands(bot);
 
+  // ─── Register bot commands with Telegram (shows on "/" in chat) ──────────
+  slog('Registering bot commands with Telegram...');
+  try {
+    // Private chat commands (full list shown to regular users)
+    await bot.telegram.setMyCommands([
+      { command: 'start',       description: 'Join the prediction game' },
+      { command: 'matches',     description: 'View open fixtures & make predictions' },
+      { command: 'missing',     description: "Matches you haven't predicted yet" },
+      { command: 'mypicks',     description: 'Your current predictions' },
+      { command: 'mystats',     description: 'Your points & prediction history' },
+      { command: 'leaderboard', description: 'Group & global leaderboard' },
+      { command: 'help',        description: 'Show all available commands' },
+    ], { scope: { type: 'all_private_chats' } });
+
+    // Group chat commands (shorter list — predictions happen via DM)
+    await bot.telegram.setMyCommands([
+      { command: 'start',       description: 'Join the prediction game' },
+      { command: 'matches',     description: 'View open fixtures & predict' },
+      { command: 'leaderboard', description: 'Group leaderboard' },
+      { command: 'mystats',     description: 'Your stats & points' },
+      { command: 'help',        description: 'Show all available commands' },
+    ], { scope: { type: 'all_group_chats' } });
+
+    slog('✅ Bot commands registered with Telegram.');
+  } catch (err: any) {
+    slog(`⚠️  setMyCommands failed (non-fatal): ${err.message}`);
+  }
+
   // ─── Global error handler ────────────────────────────────────────────────
   bot.catch((err: any, ctx) => {
     const msg: string = err?.message ?? '';
