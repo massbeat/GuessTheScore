@@ -24459,9 +24459,11 @@ function awardPoints(predictionId, points, telegramId, groupId = 0) {
     run(`UPDATE users SET total_points = total_points + ? WHERE telegram_id = ?`, [points, telegramId]);
     if (groupId !== 0) {
       run(`
-        UPDATE group_members SET total_points = total_points + ?
-        WHERE user_telegram_id = ? AND group_id = ?
-      `, [points, telegramId, groupId]);
+        INSERT INTO group_members (user_telegram_id, group_id, total_points)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_telegram_id, group_id) DO UPDATE SET
+          total_points = total_points + excluded.total_points
+      `, [telegramId, groupId, points]);
     }
   });
 }
@@ -25060,7 +25062,15 @@ Type your predicted score:
       groupId = getChatGroupId(ctx);
     } else {
       const groups = getUserGroups(user.id);
-      if (groups.length === 1) groupId = groups[0].group_id;
+      if (groups.length === 1) {
+        groupId = groups[0].group_id;
+      } else if (groups.length > 1) {
+        return sendPrivate(
+          ctx,
+          user.id,
+          `\u26A0\uFE0F You are in multiple groups. Please use /matches to predict via buttons so your pick is counted on the right leaderboard.`
+        );
+      }
     }
     upsertPrediction(user.id, matchId, groupId, homeScore, awayScore);
     await sendPrivate(
