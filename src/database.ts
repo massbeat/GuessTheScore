@@ -364,11 +364,15 @@ export function getAllUserPredictionsWithGroups(telegramId: number) {
 }
 
 /** All predictions (all users) for matches that finished within the last N hours.
- *  One row per (prediction, group).  Matches are ordered newest-first; within each
- *  match predictions are sorted by group then points DESC. */
-export function getLastResultsPredictions(hours: number = 24) {
-  // We add 2 h to the window to account for match duration, since we only have
-  // kickoff_time (no finished_at timestamp).
+ *  Pass groupId to restrict to a single group (for group-chat context).
+ *  Omit groupId (or pass undefined) to get all groups (for DM context).
+ *  One row per (prediction × group). Ordered: match newest-first, then points DESC. */
+export function getLastResultsPredictions(hours: number = 24, groupId?: number) {
+  // +2 h to account for match duration (no finished_at timestamp).
+  const params: any[] = [hours + 2];
+  const groupFilter = groupId !== undefined
+    ? (params.push(groupId), 'AND p.group_id = ?')
+    : '';
   return all(`
     SELECT p.*,
            m.id AS match_id, m.home_team, m.away_team, m.kickoff_time,
@@ -381,8 +385,9 @@ export function getLastResultsPredictions(hours: number = 24) {
     LEFT JOIN groups g ON g.group_id = p.group_id
     WHERE m.status = 'finished'
       AND m.kickoff_time >= datetime('now', '-' || ? || ' hours')
+      ${groupFilter}
     ORDER BY m.kickoff_time DESC, p.group_id ASC, COALESCE(p.points_awarded, 0) DESC
-  `, [hours + 2]);
+  `, params);
 }
 
 export function awardPoints(

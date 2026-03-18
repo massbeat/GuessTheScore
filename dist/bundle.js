@@ -24464,7 +24464,9 @@ function getAllUserPredictionsWithGroups(telegramId) {
     LIMIT 40
   `, [telegramId]);
 }
-function getLastResultsPredictions(hours = 24) {
+function getLastResultsPredictions(hours = 24, groupId) {
+  const params = [hours + 2];
+  const groupFilter = groupId !== void 0 ? (params.push(groupId), "AND p.group_id = ?") : "";
   return all(`
     SELECT p.*,
            m.id AS match_id, m.home_team, m.away_team, m.kickoff_time,
@@ -24477,8 +24479,9 @@ function getLastResultsPredictions(hours = 24) {
     LEFT JOIN groups g ON g.group_id = p.group_id
     WHERE m.status = 'finished'
       AND m.kickoff_time >= datetime('now', '-' || ? || ' hours')
+      ${groupFilter}
     ORDER BY m.kickoff_time DESC, p.group_id ASC, COALESCE(p.points_awarded, 0) DESC
-  `, [hours + 2]);
+  `, params);
 }
 function awardPoints(predictionId, points, telegramId, groupId = 0) {
   transaction(() => {
@@ -25091,16 +25094,7 @@ Type your predicted score:
       { parse_mode: "HTML" }
     );
   });
-  bot.command("lastresults", async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    upsertUser(user.id, user.username, user.first_name);
-    if (isGroupChat(ctx)) autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
-    const rows = getLastResultsPredictions(24);
-    if (rows.length === 0) {
-      await ctx.reply("\u{1F4ED} No finished matches in the last 24 hours.");
-      return;
-    }
+  function buildLastResultsBlock(rows) {
     const matchMap = /* @__PURE__ */ new Map();
     for (const row of rows) {
       if (!matchMap.has(row.match_id)) {
@@ -25111,42 +25105,73 @@ Type your predicted score:
           kickoff_time: row.kickoff_time,
           actual_home_score: row.actual_home_score,
           actual_away_score: row.actual_away_score,
-          groups: /* @__PURE__ */ new Map()
-        });
-      }
-      const matchData = matchMap.get(row.match_id);
-      const groupKey = String(row.group_id ?? 0);
-      if (!matchData.groups.has(groupKey)) {
-        matchData.groups.set(groupKey, {
-          groupId: row.group_id ?? 0,
-          groupName: row.group_name || (row.group_id ? `Group ${row.group_id}` : "No group"),
           preds: []
         });
       }
-      matchData.groups.get(groupKey).preds.push(row);
+      matchMap.get(row.match_id).preds.push(row);
     }
-    let text = `\u{1F4CA} <b>Last 24h Results</b>
-
-`;
+    let text = "";
     for (const [, m] of matchMap) {
       text += `\u26BD <b>${escapeHtml(m.home_team)} ${m.actual_home_score}\u2013${m.actual_away_score} ${escapeHtml(m.away_team)}</b>
 `;
-      text += `\u{1F3C6} ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}
+      text += `   ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}
 `;
-      for (const [, g] of m.groups) {
-        text += `
-   <b>${escapeHtml(g.groupName)}:</b>
+      const sorted = [...m.preds].sort(
+        (a, b) => (b.points_awarded ?? -1) - (a.points_awarded ?? -1)
+      );
+      for (const p of sorted) {
+        const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
+        const pts = p.points_awarded !== null ? `<b>${p.points_awarded} pts</b> \u2014 ${pointsLabel(p.points_awarded)}` : "<i>not scored yet</i>";
+        text += `   \u2022 ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}
 `;
-        for (const p of g.preds) {
-          const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
-          const pts = p.points_awarded !== null ? `<b>${p.points_awarded} pts</b> \u2014 ${pointsLabel(p.points_awarded)}` : "<i>not scored</i>";
-          text += `   \u2022 ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}
-`;
-        }
       }
       text += "\n";
     }
-    await ctx.reply(text, { parse_mode: "HTML" });
+    return text;
+  }
+  bot.command("lastresults", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      const groupId = getChatGroupId(ctx);
+      const groupName = getChatGroupName(ctx);
+      const rows = getLastResultsPredictions(24, groupId);
+      if (rows.length === 0) {
+        await ctx.reply("\u{1F4ED} No finished matches in the last 24 hours for this group.");
+        return;
+      }
+      await ctx.reply(
+        `\u{1F4CA} <b>Last 24h Results \u2014 ${escapeHtml(groupName)}</b>
+
+` + buildLastResultsBlock(rows),
+        { parse_mode: "HTML" }
+      );
+    } else {
+      const userGroups = getUserGroups(user.id);
+      if (userGroups.length === 0) {
+        await ctx.reply("\u{1F6AB} You are not in any competition group. Use /start in a group first.");
+        return;
+      }
+      let fullText = `\u{1F4CA} <b>Last 24h Results</b>
+
+`;
+      let anyResults = false;
+      for (const g of userGroups) {
+        const rows = getLastResultsPredictions(24, g.group_id);
+        if (rows.length === 0) continue;
+        anyResults = true;
+        const gName = escapeHtml(g.group_name || `Group ${g.group_id}`);
+        fullText += `\u{1F3C6} <b>${gName}</b>
+` + buildLastResultsBlock(rows);
+      }
+      if (!anyResults) {
+        await ctx.reply("\u{1F4ED} No finished matches in the last 24 hours.");
+        return;
+      }
+      await ctx.reply(fullText, { parse_mode: "HTML" });
+    }
   });
   bot.command("cancel", async (ctx) => {
     const user = ctx.from;

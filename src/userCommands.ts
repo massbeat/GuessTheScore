@@ -485,68 +485,94 @@ export function registerUserCommands(bot: Telegraf): void {
     );
   });
 
-  // ─── /lastresults — predictions from all users for last-24h finished matches
-  bot.command('lastresults', async (ctx) => {
-    const user = ctx.from;
-    if (!user) return;
-    upsertUser(user.id, user.username, user.first_name);
-    if (isGroupChat(ctx)) autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
-
-    const rows = getLastResultsPredictions(24);
-
-    if (rows.length === 0) {
-      await ctx.reply('📭 No finished matches in the last 24 hours.');
-      return;
-    }
-
-    // Group rows: matchId → groupId → predictions[]
+  // ─── Helper: render last-results rows (already scoped to one group) ────────
+  function buildLastResultsBlock(rows: any[]): string {
+    // Group rows by match
     const matchMap = new Map<number, {
       home_team: string; away_team: string; league: string;
       kickoff_time: string; actual_home_score: number; actual_away_score: number;
-      groups: Map<string, { groupId: number; groupName: string; preds: any[] }>;
+      preds: any[];
     }>();
-
     for (const row of rows) {
       if (!matchMap.has(row.match_id)) {
         matchMap.set(row.match_id, {
           home_team: row.home_team, away_team: row.away_team, league: row.league,
           kickoff_time: row.kickoff_time,
           actual_home_score: row.actual_home_score, actual_away_score: row.actual_away_score,
-          groups: new Map(),
-        });
-      }
-      const matchData = matchMap.get(row.match_id)!;
-      const groupKey = String(row.group_id ?? 0);
-      if (!matchData.groups.has(groupKey)) {
-        matchData.groups.set(groupKey, {
-          groupId: row.group_id ?? 0,
-          groupName: row.group_name || (row.group_id ? `Group ${row.group_id}` : 'No group'),
           preds: [],
         });
       }
-      matchData.groups.get(groupKey)!.preds.push(row);
+      matchMap.get(row.match_id)!.preds.push(row);
     }
 
-    let text = `📊 <b>Last 24h Results</b>\n\n`;
-
+    let text = '';
     for (const [, m] of matchMap) {
       text += `⚽ <b>${escapeHtml(m.home_team)} ${m.actual_home_score}–${m.actual_away_score} ${escapeHtml(m.away_team)}</b>\n`;
-      text += `🏆 ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}\n`;
-
-      for (const [, g] of m.groups) {
-        text += `\n   <b>${escapeHtml(g.groupName)}:</b>\n`;
-        for (const p of g.preds) {
-          const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
-          const pts = p.points_awarded !== null
-            ? `<b>${p.points_awarded} pts</b> — ${pointsLabel(p.points_awarded)}`
-            : '<i>not scored</i>';
-          text += `   • ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}\n`;
-        }
+      text += `   ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}\n`;
+      // Sort highest points first
+      const sorted = [...m.preds].sort(
+        (a, b) => (b.points_awarded ?? -1) - (a.points_awarded ?? -1)
+      );
+      for (const p of sorted) {
+        const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
+        const pts = p.points_awarded !== null
+          ? `<b>${p.points_awarded} pts</b> — ${pointsLabel(p.points_awarded)}`
+          : '<i>not scored yet</i>';
+        text += `   • ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}\n`;
       }
       text += '\n';
     }
+    return text;
+  }
 
-    await ctx.reply(text, { parse_mode: 'HTML' });
+  // ─── /lastresults — per-group results for last-24h finished matches ────────
+  //   • In a group chat → shows only that group's predictions
+  //   • In DM          → shows each of the user's groups as a separate section
+  bot.command('lastresults', async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+
+    if (isGroupChat(ctx)) {
+      autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+      const groupId   = getChatGroupId(ctx);
+      const groupName = getChatGroupName(ctx);
+
+      const rows = getLastResultsPredictions(24, groupId);
+      if (rows.length === 0) {
+        await ctx.reply('📭 No finished matches in the last 24 hours for this group.');
+        return;
+      }
+      await ctx.reply(
+        `📊 <b>Last 24h Results — ${escapeHtml(groupName)}</b>\n\n` + buildLastResultsBlock(rows),
+        { parse_mode: 'HTML' }
+      );
+
+    } else {
+      // DM: one section per group the user belongs to
+      const userGroups = getUserGroups(user.id);
+      if (userGroups.length === 0) {
+        await ctx.reply('🚫 You are not in any competition group. Use /start in a group first.');
+        return;
+      }
+
+      let fullText = `📊 <b>Last 24h Results</b>\n\n`;
+      let anyResults = false;
+
+      for (const g of userGroups) {
+        const rows = getLastResultsPredictions(24, g.group_id);
+        if (rows.length === 0) continue;
+        anyResults = true;
+        const gName = escapeHtml(g.group_name || `Group ${g.group_id}`);
+        fullText += `🏆 <b>${gName}</b>\n` + buildLastResultsBlock(rows);
+      }
+
+      if (!anyResults) {
+        await ctx.reply('📭 No finished matches in the last 24 hours.');
+        return;
+      }
+      await ctx.reply(fullText, { parse_mode: 'HTML' });
+    }
   });
 
   // ─── /cancel — cancel pending prediction ─────────────────────────────────
