@@ -276,6 +276,16 @@ export function getActiveMatches() {
   return all(`SELECT * FROM matches WHERE status = 'active' ORDER BY kickoff_time ASC`);
 }
 
+/** Active matches whose kickoff was more than 90 minutes ago — candidates for batch finalization */
+export function getActivePastMatches() {
+  return all(`
+    SELECT * FROM matches
+    WHERE status = 'active'
+      AND kickoff_time < datetime('now', '-90 minutes')
+    ORDER BY kickoff_time ASC
+  `);
+}
+
 export function getPendingMatches() {
   return all(`SELECT * FROM matches WHERE status = 'pending' ORDER BY kickoff_time ASC`);
 }
@@ -337,6 +347,44 @@ export function getUserPredictions(telegramId: number) {
   `, [telegramId]);
 }
 
+/** All predictions for a user across all groups, with group name and match info.
+ *  One row per (prediction, group) — so a match predicted in 2 groups = 2 rows. */
+export function getAllUserPredictionsWithGroups(telegramId: number) {
+  return all(`
+    SELECT p.*,
+           m.home_team, m.away_team, m.kickoff_time, m.actual_home_score, m.actual_away_score, m.status,
+           g.group_name
+    FROM predictions p
+    JOIN matches m ON p.match_id = m.id
+    LEFT JOIN groups g ON g.group_id = p.group_id
+    WHERE p.user_telegram_id = ?
+    ORDER BY m.kickoff_time DESC, p.group_id ASC
+    LIMIT 40
+  `, [telegramId]);
+}
+
+/** All predictions (all users) for matches that finished within the last N hours.
+ *  One row per (prediction, group).  Matches are ordered newest-first; within each
+ *  match predictions are sorted by group then points DESC. */
+export function getLastResultsPredictions(hours: number = 24) {
+  // We add 2 h to the window to account for match duration, since we only have
+  // kickoff_time (no finished_at timestamp).
+  return all(`
+    SELECT p.*,
+           m.id AS match_id, m.home_team, m.away_team, m.kickoff_time,
+           m.actual_home_score, m.actual_away_score, m.league,
+           u.username, u.first_name,
+           g.group_name
+    FROM matches m
+    JOIN predictions p ON p.match_id = m.id
+    JOIN users u ON u.telegram_id = p.user_telegram_id
+    LEFT JOIN groups g ON g.group_id = p.group_id
+    WHERE m.status = 'finished'
+      AND m.kickoff_time >= datetime('now', '-' || ? || ' hours')
+    ORDER BY m.kickoff_time DESC, p.group_id ASC, COALESCE(p.points_awarded, 0) DESC
+  `, [hours + 2]);
+}
+
 export function awardPoints(
   predictionId: number,
   points: number,
@@ -346,12 +394,17 @@ export function awardPoints(
   transaction(() => {
     run(`UPDATE predictions SET points_awarded = ? WHERE id = ?`, [points, predictionId]);
     run(`UPDATE users SET total_points = total_points + ? WHERE telegram_id = ?`, [points, telegramId]);
-    // Update per-group points if this prediction belongs to a real group
+    // Update per-group points if this prediction belongs to a real group.
+    // Use UPSERT so the row is created if the user somehow has a prediction
+    // for a group but no group_members record (e.g. scored before /start,
+    // or data predating the multi-group migration).
     if (groupId !== 0) {
       run(`
-        UPDATE group_members SET total_points = total_points + ?
-        WHERE user_telegram_id = ? AND group_id = ?
-      `, [points, telegramId, groupId]);
+        INSERT INTO group_members (user_telegram_id, group_id, total_points)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_telegram_id, group_id) DO UPDATE SET
+          total_points = total_points + excluded.total_points
+      `, [telegramId, groupId, points]);
     }
   });
 }

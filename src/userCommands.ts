@@ -5,6 +5,8 @@ import {
   getMatch,
   upsertPrediction,
   getUserPredictions,
+  getAllUserPredictionsWithGroups,
+  getLastResultsPredictions,
   getGlobalLeaderboard,
   getGroupLeaderboard,
   getUser,
@@ -24,6 +26,7 @@ import {
   isAdmin,
   sendPrivate,
 } from './helpers';
+import { pointsLabel } from './scoring';
 
 // In-memory state for the predict conversation flow
 // Maps telegramId -> {matchId, groupId} they are currently predicting for
@@ -203,24 +206,47 @@ export function registerUserCommands(bot: Telegraf): void {
     }
   }
 
-  // ─── Helper: show submitted predictions for a group (sends to DM) ─────────
-  async function showPicksForGroup(ctx: any, userId: number, groupId: number): Promise<void> {
-    const matches = getPredictedMatches(userId, groupId);
-    if (matches.length === 0) {
-      await sendPrivate(ctx, userId, '📭 You haven\'t predicted any active matches yet. Use /matches to get started!');
+  // ─── Helper: show all predictions across all groups ───────────────────────
+  // One row per (match × group). Same match in 2 groups → 2 rows.
+  async function showAllPicks(ctx: any, userId: number): Promise<void> {
+    const picks = getAllUserPredictionsWithGroups(userId);
+    if (picks.length === 0) {
+      await sendPrivate(ctx, userId,
+        '📭 You haven\'t made any predictions yet. Use /matches to get started!');
       return;
     }
 
-    let text = `✅ <b>Your Predictions (${matches.length} active matches)</b>\n`;
-    for (const m of matches) {
-      const locked = isMatchLocked(m.kickoff_time);
-      text += `\n${locked ? '🔒' : '🟢'} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>\n`;
-      text += `   📅 ${formatKickoff(m.kickoff_time)}\n`;
-      text += `   🎯 Your pick: <b>${m.predicted_home_score} - ${m.predicted_away_score}</b>`;
-      text += locked ? '' : '  <i>(editable)</i>';
-      text += '\n';
+    let text = `🎯 <b>Your Predictions</b>\n\n`;
+    for (const p of picks) {
+      const groupLabel = escapeHtml(p.group_name || (p.group_id ? `Group ${p.group_id}` : 'No group'));
+      if (p.status === 'finished') {
+        const pts = p.points_awarded !== null
+          ? `<b>${p.points_awarded} pts</b> — ${pointsLabel(p.points_awarded)}`
+          : '<i>not scored yet</i>';
+        text += `⚽ <b>${escapeHtml(p.home_team)} ${p.actual_home_score}–${p.actual_away_score} ${escapeHtml(p.away_team)}</b>\n`;
+        text += `   🏆 ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}\n\n`;
+      } else {
+        const locked = isMatchLocked(p.kickoff_time);
+        text += `${locked ? '🔒' : '🟢'} <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>\n`;
+        text += `   📅 ${formatKickoff(p.kickoff_time)}\n`;
+        text += `   🏆 ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b>`;
+        text += locked ? '\n\n' : '  <i>(editable)</i>\n\n';
+      }
     }
     await sendPrivate(ctx, userId, text, { parse_mode: 'HTML' });
+  }
+
+  // ─── Helper: show submitted predictions for a single group (kept for gsel callback) ──
+  async function showPicksForGroup(ctx: any, userId: number, groupId: number): Promise<void> {
+    // Now delegates to the all-groups view for a unified experience
+    await showAllPicks(ctx, userId);
+  }
+
+  // ─── Helper: plain name for leaderboard (no @ so no Telegram notifications) ─
+  function plainName(u: any): string {
+    // Show username without @ prefix so Telegram doesn't create a mention/ping.
+    // Fall back to first_name, then a generic ID label.
+    return escapeHtml(u.username || u.first_name || `User${u.telegram_id}`);
   }
 
   // ─── Helper: format and send leaderboard ──────────────────────────────────
@@ -233,7 +259,7 @@ export function registerUserCommands(bot: Telegraf): void {
     let text = `🏆 <b>${title} (Top ${board.length})</b>\n\n`;
     board.forEach((u: any, i: number) => {
       const medal = medals[i] ?? `${i + 1}.`;
-      text += `${medal} ${escapeHtml(displayName(u))} — <b>${u.total_points} pts</b>\n`;
+      text += `${medal} ${plainName(u)} — <b>${u.total_points} pts</b>\n`;
     });
     await ctx.reply(text, { parse_mode: 'HTML' });
   }
@@ -323,19 +349,15 @@ export function registerUserCommands(bot: Telegraf): void {
     }
   });
 
-  // ─── /mypicks — active matches user already predicted ───────────────────
+  // ─── /mypicks — all predictions across all groups ────────────────────────
   bot.command('mypicks', async (ctx) => {
     const user = ctx.from;
     if (!user) return;
     upsertUser(user.id, user.username, user.first_name);
-
     if (isGroupChat(ctx)) {
       autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
-      await showPicksForGroup(ctx, user.id, getChatGroupId(ctx));
-    } else {
-      const groupId = await resolveGroupForDM(ctx, user.id, 'mypicks');
-      if (groupId !== null) await showPicksForGroup(ctx, user.id, groupId);
     }
+    await showAllPicks(ctx, user.id);
   });
 
   // ─── /leaderboard ────────────────────────────────────────────────────────
@@ -381,7 +403,7 @@ export function registerUserCommands(bot: Telegraf): void {
     if (!dbUser) return ctx.reply('You haven\'t played yet. Use /start in a group to register!');
 
     const groups = getUserGroups(user.id);
-    const predictions = getUserPredictions(user.id);
+    const predictions = getAllUserPredictionsWithGroups(user.id);
     const name = escapeHtml(displayName({ username: user.username, first_name: user.first_name, telegram_id: user.id }));
 
     let text = `📊 <b>Stats for ${name}</b>\n\n`;
@@ -399,11 +421,16 @@ export function registerUserCommands(bot: Telegraf): void {
       text += '<i>No predictions yet. Use /matches to get started!</i>';
     } else {
       for (const p of predictions) {
-        const status = p.status === 'finished'
-          ? `${p.actual_home_score}-${p.actual_away_score} | <b>${p.points_awarded ?? '?'} pts</b>`
-          : '<i>Pending...</i>';
-        text += `\n• <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>\n`;
-        text += `  Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | Result: ${status}\n`;
+        const groupLabel = escapeHtml(p.group_name || (p.group_id ? `Group ${p.group_id}` : 'No group'));
+        if (p.status === 'finished') {
+          const pts = p.points_awarded !== null ? p.points_awarded : '?';
+          const label = p.points_awarded !== null ? pointsLabel(p.points_awarded) : '';
+          text += `\n• <b>${escapeHtml(p.home_team)} ${p.actual_home_score}–${p.actual_away_score} ${escapeHtml(p.away_team)}</b>\n`;
+          text += `  🏆 ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | <b>${pts} pts</b>${label ? ` ${label}` : ''}\n`;
+        } else {
+          text += `\n• <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>\n`;
+          text += `  🏆 ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | <i>Pending…</i>\n`;
+        }
       }
     }
     await ctx.reply(text, { parse_mode: 'HTML' });
@@ -456,6 +483,70 @@ export function registerUserCommands(bot: Telegraf): void {
       `<i>Type /cancel to cancel</i>`,
       { parse_mode: 'HTML' }
     );
+  });
+
+  // ─── /lastresults — predictions from all users for last-24h finished matches
+  bot.command('lastresults', async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+
+    const rows = getLastResultsPredictions(24);
+
+    if (rows.length === 0) {
+      await ctx.reply('📭 No finished matches in the last 24 hours.');
+      return;
+    }
+
+    // Group rows: matchId → groupId → predictions[]
+    const matchMap = new Map<number, {
+      home_team: string; away_team: string; league: string;
+      kickoff_time: string; actual_home_score: number; actual_away_score: number;
+      groups: Map<string, { groupId: number; groupName: string; preds: any[] }>;
+    }>();
+
+    for (const row of rows) {
+      if (!matchMap.has(row.match_id)) {
+        matchMap.set(row.match_id, {
+          home_team: row.home_team, away_team: row.away_team, league: row.league,
+          kickoff_time: row.kickoff_time,
+          actual_home_score: row.actual_home_score, actual_away_score: row.actual_away_score,
+          groups: new Map(),
+        });
+      }
+      const matchData = matchMap.get(row.match_id)!;
+      const groupKey = String(row.group_id ?? 0);
+      if (!matchData.groups.has(groupKey)) {
+        matchData.groups.set(groupKey, {
+          groupId: row.group_id ?? 0,
+          groupName: row.group_name || (row.group_id ? `Group ${row.group_id}` : 'No group'),
+          preds: [],
+        });
+      }
+      matchData.groups.get(groupKey)!.preds.push(row);
+    }
+
+    let text = `📊 <b>Last 24h Results</b>\n\n`;
+
+    for (const [, m] of matchMap) {
+      text += `⚽ <b>${escapeHtml(m.home_team)} ${m.actual_home_score}–${m.actual_away_score} ${escapeHtml(m.away_team)}</b>\n`;
+      text += `🏆 ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}\n`;
+
+      for (const [, g] of m.groups) {
+        text += `\n   <b>${escapeHtml(g.groupName)}:</b>\n`;
+        for (const p of g.preds) {
+          const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
+          const pts = p.points_awarded !== null
+            ? `<b>${p.points_awarded} pts</b> — ${pointsLabel(p.points_awarded)}`
+            : '<i>not scored</i>';
+          text += `   • ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}\n`;
+        }
+      }
+      text += '\n';
+    }
+
+    await ctx.reply(text, { parse_mode: 'HTML' });
   });
 
   // ─── /cancel — cancel pending prediction ─────────────────────────────────
@@ -511,8 +602,15 @@ export function registerUserCommands(bot: Telegraf): void {
       groupId = getChatGroupId(ctx);
     } else {
       const groups = getUserGroups(user.id);
-      if (groups.length === 1) groupId = groups[0].group_id;
-      // If multiple groups: 0 = legacy/global; user should use button flow instead
+      if (groups.length === 1) {
+        groupId = groups[0].group_id;
+      } else if (groups.length > 1) {
+        // Can't tell which group — direct the user to the button flow
+        return sendPrivate(ctx, user.id,
+          `⚠️ You are in multiple groups. Please use /matches to predict via buttons so your pick is counted on the right leaderboard.`,
+        );
+      }
+      // groups.length === 0 → not in any group; upsertPrediction will save with group_id=0
     }
 
     upsertPrediction(user.id, matchId, groupId, homeScore, awayScore);

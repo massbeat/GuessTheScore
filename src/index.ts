@@ -152,9 +152,10 @@ async function main() {
       { command: 'start',       description: 'Join the prediction game' },
       { command: 'matches',     description: 'View open fixtures & make predictions' },
       { command: 'missing',     description: "Matches you haven't predicted yet" },
-      { command: 'mypicks',     description: 'Your current predictions' },
+      { command: 'mypicks',     description: 'Your predictions across all groups' },
       { command: 'mystats',     description: 'Your points & prediction history' },
       { command: 'leaderboard', description: 'Group & global leaderboard' },
+      { command: 'lastresults', description: 'Results & picks from last 24 hours' },
       { command: 'help',        description: 'Show all available commands' },
     ], { scope: { type: 'all_private_chats' } });
 
@@ -163,6 +164,7 @@ async function main() {
       { command: 'start',       description: 'Join the prediction game' },
       { command: 'matches',     description: 'View open fixtures & predict' },
       { command: 'leaderboard', description: 'Group leaderboard' },
+      { command: 'lastresults', description: 'Results & picks from last 24 hours' },
       { command: 'mystats',     description: 'Your stats & points' },
       { command: 'help',        description: 'Show all available commands' },
     ], { scope: { type: 'all_group_chats' } });

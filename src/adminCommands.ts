@@ -13,6 +13,7 @@ import {
   getFinishedMatches,
   resetFinishedMatches,
   getFinishedUnscoredMatches,
+  getActivePastMatches,
   getRegisteredGroups,
 } from './database';
 import { fetchCompetitions, fetchFixturesByCompetition, fetchMatchById } from './footballApi';
@@ -475,27 +476,80 @@ export function registerAdminCommands(bot: Telegraf): void {
     await ctx.editMessageText('❌ Reset finished matches cancelled.');
   });
 
-  // ─── /admin_finalize_all — batch score all finished unscored matches ──────
+  // ─── /admin_finalize_all — batch fetch results + score all past matches ───
   bot.command('admin_finalize_all', adminOnly, async (ctx) => {
-    const matches = getFinishedUnscoredMatches();
+    // Step 1: find active matches whose kickoff was 90+ minutes ago
+    const pastMatches = getActivePastMatches();
 
-    if (matches.length === 0) {
+    // Step 2: also catch any matches already marked finished but with unscored
+    // predictions (safety net for edge cases)
+    const alreadyFinished = getFinishedUnscoredMatches();
+
+    if (pastMatches.length === 0 && alreadyFinished.length === 0) {
       return ctx.reply(
-        `✅ <b>All caught up!</b>\n\nNo finished matches with unscored predictions found.`,
+        `✅ <b>All caught up!</b>\n\nNo past matches found that need finalizing.`,
         { parse_mode: 'HTML' }
       );
     }
 
-    await ctx.reply(`⏳ Scoring ${matches.length} finished match(es)...`);
+    const totalToProcess = pastMatches.length + alreadyFinished.length;
+    await ctx.reply(
+      `⏳ Checking ${pastMatches.length} past active match(es) via API` +
+      (alreadyFinished.length > 0 ? ` + ${alreadyFinished.length} already-finished match(es)` : '') +
+      `...`,
+    );
 
     let totalMatchesScored = 0;
     let totalPredictionsScored = 0;
-    let resultText = `✅ <b>Batch Scoring Complete!</b>\n\n`;
+    let skippedNotFinished = 0;
+    let skippedApiError = 0;
+    let resultText = '';
 
-    for (const match of matches) {
+    // ── Fetch results from API for past active matches ──────────────────────
+    for (const match of pastMatches) {
+      try {
+        const fixture = await fetchMatchById(match.id);
+
+        if (!fixture || fixture.status !== 'FINISHED' || fixture.home_score === null || fixture.away_score === null) {
+          skippedNotFinished++;
+          continue;
+        }
+
+        // Mark match as finished with the actual score
+        setMatchResult(match.id, fixture.home_score, fixture.away_score);
+        logAdminAction(ctx.from!.id, 'FINALIZE_ALL_MATCH', `matchId=${match.id} ${match.home_team} ${fixture.home_score}-${fixture.away_score} ${match.away_team}`);
+
+        // Score all predictions for this match
+        const predictions = getPredictionsForMatch(match.id);
+        let scoredCount = 0;
+        for (const pred of predictions) {
+          if (pred.points_awarded !== null && pred.points_awarded !== undefined) continue;
+          const points = calculatePoints(
+            pred.predicted_home_score,
+            pred.predicted_away_score,
+            fixture.home_score,
+            fixture.away_score
+          );
+          awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
+          scoredCount++;
+        }
+
+        totalMatchesScored++;
+        totalPredictionsScored += scoredCount;
+        resultText +=
+          `⚽ <b>${escapeHtml(match.home_team)} ${fixture.home_score}–${fixture.away_score} ${escapeHtml(match.away_team)}</b>\n` +
+          `   ${scoredCount} prediction(s) scored\n\n`;
+
+      } catch (err: any) {
+        console.error(`finalize_all: API error for match ${match.id}:`, err.message);
+        skippedApiError++;
+      }
+    }
+
+    // ── Score predictions on already-finished matches (safety net) ──────────
+    for (const match of alreadyFinished) {
       const predictions = getPredictionsForMatch(match.id);
       let scoredCount = 0;
-
       for (const pred of predictions) {
         if (pred.points_awarded !== null && pred.points_awarded !== undefined) continue;
         const points = calculatePoints(
@@ -507,12 +561,11 @@ export function registerAdminCommands(bot: Telegraf): void {
         awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
         scoredCount++;
       }
-
       if (scoredCount > 0) {
         totalMatchesScored++;
         totalPredictionsScored += scoredCount;
         resultText +=
-          `⚽ <b>${escapeHtml(match.home_team)} ${match.actual_home_score}–${match.actual_away_score} ${escapeHtml(match.away_team)}</b>\n` +
+          `⚽ <b>${escapeHtml(match.home_team)} ${match.actual_home_score}–${match.actual_away_score} ${escapeHtml(match.away_team)}</b> <i>(was already finished)</i>\n` +
           `   ${scoredCount} prediction(s) scored\n\n`;
       }
     }
@@ -520,15 +573,18 @@ export function registerAdminCommands(bot: Telegraf): void {
     logAdminAction(
       ctx.from!.id,
       'FINALIZE_ALL',
-      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored}`
+      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored} skippedNotFinished=${skippedNotFinished} skippedApiError=${skippedApiError}`
     );
 
-    resultText +=
-      `📊 <b>Summary:</b>\n` +
-      `• ${totalMatchesScored} match(es) scored\n` +
-      `• ${totalPredictionsScored} prediction(s) awarded points`;
+    let summary = `✅ <b>Batch Finalize Complete!</b>\n\n`;
+    if (resultText) summary += resultText;
+    summary += `📊 <b>Summary:</b>\n`;
+    summary += `• ${totalMatchesScored} match(es) finalized & scored\n`;
+    summary += `• ${totalPredictionsScored} prediction(s) awarded points\n`;
+    if (skippedNotFinished > 0) summary += `• ${skippedNotFinished} match(es) not finished yet (skipped)\n`;
+    if (skippedApiError > 0)    summary += `• ${skippedApiError} match(es) had API errors (use /admin_update &lt;id&gt; to retry)\n`;
 
-    await ctx.reply(resultText, { parse_mode: 'HTML' });
+    await ctx.reply(summary, { parse_mode: 'HTML' });
   });
 
   // ─── /admin_groups — list registered groups ───────────────────────────────

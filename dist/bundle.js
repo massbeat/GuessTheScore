@@ -24410,6 +24410,14 @@ function getMatch(matchId) {
 function getActiveMatches() {
   return all(`SELECT * FROM matches WHERE status = 'active' ORDER BY kickoff_time ASC`);
 }
+function getActivePastMatches() {
+  return all(`
+    SELECT * FROM matches
+    WHERE status = 'active'
+      AND kickoff_time < datetime('now', '-90 minutes')
+    ORDER BY kickoff_time ASC
+  `);
+}
 function setMatchResult(matchId, homeScore, awayScore) {
   run(`
     UPDATE matches SET status = 'finished', actual_home_score = ?, actual_away_score = ? WHERE id = ?
@@ -24443,15 +24451,34 @@ function getPredictionsForMatch(matchId) {
     WHERE p.match_id = ?
   `, [matchId]);
 }
-function getUserPredictions(telegramId) {
+function getAllUserPredictionsWithGroups(telegramId) {
   return all(`
-    SELECT p.*, m.home_team, m.away_team, m.kickoff_time, m.actual_home_score, m.actual_away_score, m.status
+    SELECT p.*,
+           m.home_team, m.away_team, m.kickoff_time, m.actual_home_score, m.actual_away_score, m.status,
+           g.group_name
     FROM predictions p
     JOIN matches m ON p.match_id = m.id
+    LEFT JOIN groups g ON g.group_id = p.group_id
     WHERE p.user_telegram_id = ?
-    ORDER BY m.kickoff_time DESC
-    LIMIT 20
+    ORDER BY m.kickoff_time DESC, p.group_id ASC
+    LIMIT 40
   `, [telegramId]);
+}
+function getLastResultsPredictions(hours = 24) {
+  return all(`
+    SELECT p.*,
+           m.id AS match_id, m.home_team, m.away_team, m.kickoff_time,
+           m.actual_home_score, m.actual_away_score, m.league,
+           u.username, u.first_name,
+           g.group_name
+    FROM matches m
+    JOIN predictions p ON p.match_id = m.id
+    JOIN users u ON u.telegram_id = p.user_telegram_id
+    LEFT JOIN groups g ON g.group_id = p.group_id
+    WHERE m.status = 'finished'
+      AND m.kickoff_time >= datetime('now', '-' || ? || ' hours')
+    ORDER BY m.kickoff_time DESC, p.group_id ASC, COALESCE(p.points_awarded, 0) DESC
+  `, [hours + 2]);
 }
 function awardPoints(predictionId, points, telegramId, groupId = 0) {
   transaction(() => {
@@ -24476,15 +24503,6 @@ function getUnpredictedMatches(telegramId, groupId) {
         SELECT match_id FROM predictions
         WHERE user_telegram_id = ? AND group_id = ?
       )
-    ORDER BY m.kickoff_time ASC
-  `, [telegramId, groupId]);
-}
-function getPredictedMatches(telegramId, groupId) {
-  return all(`
-    SELECT m.*, p.predicted_home_score, p.predicted_away_score
-    FROM matches m
-    JOIN predictions p ON p.match_id = m.id AND p.user_telegram_id = ? AND p.group_id = ?
-    WHERE m.status = 'active'
     ORDER BY m.kickoff_time ASC
   `, [telegramId, groupId]);
 }
@@ -24629,6 +24647,36 @@ Tap my name and press <b>Start</b>, then try again.`,
       );
     }
     return null;
+  }
+}
+
+// src/scoring.ts
+function calculatePoints(predictedHome, predictedAway, actualHome, actualAway) {
+  if (predictedHome === actualHome && predictedAway === actualAway) {
+    return 3;
+  }
+  const predictedDiff = predictedHome - predictedAway;
+  const actualDiff = actualHome - actualAway;
+  if (predictedDiff === actualDiff) {
+    return 2;
+  }
+  const predictedOutcome = Math.sign(predictedDiff);
+  const actualOutcome = Math.sign(actualDiff);
+  if (predictedOutcome === actualOutcome) {
+    return 1;
+  }
+  return 0;
+}
+function pointsLabel(points) {
+  switch (points) {
+    case 3:
+      return "\u{1F3AF} Exact score!";
+    case 2:
+      return "\u2705 Correct difference";
+    case 1:
+      return "\u{1F44D} Correct outcome";
+    default:
+      return "\u274C Wrong outcome";
   }
 }
 
@@ -24789,26 +24837,45 @@ Click a match to predict:`,
       }
     }
   }
-  async function showPicksForGroup(ctx, userId, groupId) {
-    const matches = getPredictedMatches(userId, groupId);
-    if (matches.length === 0) {
-      await sendPrivate(ctx, userId, "\u{1F4ED} You haven't predicted any active matches yet. Use /matches to get started!");
+  async function showAllPicks(ctx, userId) {
+    const picks = getAllUserPredictionsWithGroups(userId);
+    if (picks.length === 0) {
+      await sendPrivate(
+        ctx,
+        userId,
+        "\u{1F4ED} You haven't made any predictions yet. Use /matches to get started!"
+      );
       return;
     }
-    let text = `\u2705 <b>Your Predictions (${matches.length} active matches)</b>
+    let text = `\u{1F3AF} <b>Your Predictions</b>
+
 `;
-    for (const m of matches) {
-      const locked = isMatchLocked(m.kickoff_time);
-      text += `
-${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeHtml(m.away_team)}</b>
+    for (const p of picks) {
+      const groupLabel = escapeHtml(p.group_name || (p.group_id ? `Group ${p.group_id}` : "No group"));
+      if (p.status === "finished") {
+        const pts = p.points_awarded !== null ? `<b>${p.points_awarded} pts</b> \u2014 ${pointsLabel(p.points_awarded)}` : "<i>not scored yet</i>";
+        text += `\u26BD <b>${escapeHtml(p.home_team)} ${p.actual_home_score}\u2013${p.actual_away_score} ${escapeHtml(p.away_team)}</b>
 `;
-      text += `   \u{1F4C5} ${formatKickoff(m.kickoff_time)}
+        text += `   \u{1F3C6} ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}
+
 `;
-      text += `   \u{1F3AF} Your pick: <b>${m.predicted_home_score} - ${m.predicted_away_score}</b>`;
-      text += locked ? "" : "  <i>(editable)</i>";
-      text += "\n";
+      } else {
+        const locked = isMatchLocked(p.kickoff_time);
+        text += `${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>
+`;
+        text += `   \u{1F4C5} ${formatKickoff(p.kickoff_time)}
+`;
+        text += `   \u{1F3C6} ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b>`;
+        text += locked ? "\n\n" : "  <i>(editable)</i>\n\n";
+      }
     }
     await sendPrivate(ctx, userId, text, { parse_mode: "HTML" });
+  }
+  async function showPicksForGroup(ctx, userId, groupId) {
+    await showAllPicks(ctx, userId);
+  }
+  function plainName(u) {
+    return escapeHtml(u.username || u.first_name || `User${u.telegram_id}`);
   }
   async function sendLeaderboardMessage(ctx, board, title) {
     if (board.length === 0) {
@@ -24821,7 +24888,7 @@ ${locked ? "\u{1F512}" : "\u{1F7E2}"} <b>${escapeHtml(m.home_team)} vs ${escapeH
 `;
     board.forEach((u, i) => {
       const medal = medals[i] ?? `${i + 1}.`;
-      text += `${medal} ${escapeHtml(displayName(u))} \u2014 <b>${u.total_points} pts</b>
+      text += `${medal} ${plainName(u)} \u2014 <b>${u.total_points} pts</b>
 `;
     });
     await ctx.reply(text, { parse_mode: "HTML" });
@@ -24903,11 +24970,8 @@ You must join a group where this bot is active and use /start there first.`,
     upsertUser(user.id, user.username, user.first_name);
     if (isGroupChat(ctx)) {
       autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
-      await showPicksForGroup(ctx, user.id, getChatGroupId(ctx));
-    } else {
-      const groupId = await resolveGroupForDM(ctx, user.id, "mypicks");
-      if (groupId !== null) await showPicksForGroup(ctx, user.id, groupId);
     }
+    await showAllPicks(ctx, user.id);
   });
   bot.command("leaderboard", async (ctx) => {
     const user = ctx.from;
@@ -24943,7 +25007,7 @@ You must join a group where this bot is active and use /start there first.`,
     const dbUser = getUser(user.id);
     if (!dbUser) return ctx.reply("You haven't played yet. Use /start in a group to register!");
     const groups = getUserGroups(user.id);
-    const predictions = getUserPredictions(user.id);
+    const predictions = getAllUserPredictionsWithGroups(user.id);
     const name = escapeHtml(displayName({ username: user.username, first_name: user.first_name, telegram_id: user.id }));
     let text = `\u{1F4CA} <b>Stats for ${name}</b>
 
@@ -24966,12 +25030,22 @@ You must join a group where this bot is active and use /start there first.`,
       text += "<i>No predictions yet. Use /matches to get started!</i>";
     } else {
       for (const p of predictions) {
-        const status = p.status === "finished" ? `${p.actual_home_score}-${p.actual_away_score} | <b>${p.points_awarded ?? "?"} pts</b>` : "<i>Pending...</i>";
-        text += `
+        const groupLabel = escapeHtml(p.group_name || (p.group_id ? `Group ${p.group_id}` : "No group"));
+        if (p.status === "finished") {
+          const pts = p.points_awarded !== null ? p.points_awarded : "?";
+          const label = p.points_awarded !== null ? pointsLabel(p.points_awarded) : "";
+          text += `
+\u2022 <b>${escapeHtml(p.home_team)} ${p.actual_home_score}\u2013${p.actual_away_score} ${escapeHtml(p.away_team)}</b>
+`;
+          text += `  \u{1F3C6} ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | <b>${pts} pts</b>${label ? ` ${label}` : ""}
+`;
+        } else {
+          text += `
 \u2022 <b>${escapeHtml(p.home_team)} vs ${escapeHtml(p.away_team)}</b>
 `;
-        text += `  Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | Result: ${status}
+          text += `  \u{1F3C6} ${groupLabel} | Pick: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | <i>Pending\u2026</i>
 `;
+        }
       }
     }
     await ctx.reply(text, { parse_mode: "HTML" });
@@ -25016,6 +25090,63 @@ Type your predicted score:
 <i>Type /cancel to cancel</i>`,
       { parse_mode: "HTML" }
     );
+  });
+  bot.command("lastresults", async (ctx) => {
+    const user = ctx.from;
+    if (!user) return;
+    upsertUser(user.id, user.username, user.first_name);
+    if (isGroupChat(ctx)) autoRegisterGroupAndUser(ctx, user.id, user.username, user.first_name);
+    const rows = getLastResultsPredictions(24);
+    if (rows.length === 0) {
+      await ctx.reply("\u{1F4ED} No finished matches in the last 24 hours.");
+      return;
+    }
+    const matchMap = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      if (!matchMap.has(row.match_id)) {
+        matchMap.set(row.match_id, {
+          home_team: row.home_team,
+          away_team: row.away_team,
+          league: row.league,
+          kickoff_time: row.kickoff_time,
+          actual_home_score: row.actual_home_score,
+          actual_away_score: row.actual_away_score,
+          groups: /* @__PURE__ */ new Map()
+        });
+      }
+      const matchData = matchMap.get(row.match_id);
+      const groupKey = String(row.group_id ?? 0);
+      if (!matchData.groups.has(groupKey)) {
+        matchData.groups.set(groupKey, {
+          groupId: row.group_id ?? 0,
+          groupName: row.group_name || (row.group_id ? `Group ${row.group_id}` : "No group"),
+          preds: []
+        });
+      }
+      matchData.groups.get(groupKey).preds.push(row);
+    }
+    let text = `\u{1F4CA} <b>Last 24h Results</b>
+
+`;
+    for (const [, m] of matchMap) {
+      text += `\u26BD <b>${escapeHtml(m.home_team)} ${m.actual_home_score}\u2013${m.actual_away_score} ${escapeHtml(m.away_team)}</b>
+`;
+      text += `\u{1F3C6} ${escapeHtml(m.league)} | ${formatKickoff(m.kickoff_time)}
+`;
+      for (const [, g] of m.groups) {
+        text += `
+   <b>${escapeHtml(g.groupName)}:</b>
+`;
+        for (const p of g.preds) {
+          const name = escapeHtml(p.username || p.first_name || `User${p.user_telegram_id}`);
+          const pts = p.points_awarded !== null ? `<b>${p.points_awarded} pts</b> \u2014 ${pointsLabel(p.points_awarded)}` : "<i>not scored</i>";
+          text += `   \u2022 ${name}: <b>${p.predicted_home_score}-${p.predicted_away_score}</b> | ${pts}
+`;
+        }
+      }
+      text += "\n";
+    }
+    await ctx.reply(text, { parse_mode: "HTML" });
   });
   bot.command("cancel", async (ctx) => {
     const user = ctx.from;
@@ -28997,36 +29128,6 @@ function normalizeMatch(m, competitionCode) {
   }
 }
 
-// src/scoring.ts
-function calculatePoints(predictedHome, predictedAway, actualHome, actualAway) {
-  if (predictedHome === actualHome && predictedAway === actualAway) {
-    return 3;
-  }
-  const predictedDiff = predictedHome - predictedAway;
-  const actualDiff = actualHome - actualAway;
-  if (predictedDiff === actualDiff) {
-    return 2;
-  }
-  const predictedOutcome = Math.sign(predictedDiff);
-  const actualOutcome = Math.sign(actualDiff);
-  if (predictedOutcome === actualOutcome) {
-    return 1;
-  }
-  return 0;
-}
-function pointsLabel(points) {
-  switch (points) {
-    case 3:
-      return "\u{1F3AF} Exact score!";
-    case 2:
-      return "\u2705 Correct difference";
-    case 1:
-      return "\u{1F44D} Correct outcome";
-    default:
-      return "\u274C Wrong outcome";
-  }
-}
-
 // src/logger.ts
 var import_fs2 = __toESM(require("fs"));
 var import_path2 = __toESM(require("path"));
@@ -29440,22 +29541,59 @@ Use /admin_active or /admin_fetch to re-activate matches.`,
     await ctx.editMessageText("\u274C Reset finished matches cancelled.");
   });
   bot.command("admin_finalize_all", adminOnly, async (ctx) => {
-    const matches = getFinishedUnscoredMatches();
-    if (matches.length === 0) {
+    const pastMatches = getActivePastMatches();
+    const alreadyFinished = getFinishedUnscoredMatches();
+    if (pastMatches.length === 0 && alreadyFinished.length === 0) {
       return ctx.reply(
         `\u2705 <b>All caught up!</b>
 
-No finished matches with unscored predictions found.`,
+No past matches found that need finalizing.`,
         { parse_mode: "HTML" }
       );
     }
-    await ctx.reply(`\u23F3 Scoring ${matches.length} finished match(es)...`);
+    const totalToProcess = pastMatches.length + alreadyFinished.length;
+    await ctx.reply(
+      `\u23F3 Checking ${pastMatches.length} past active match(es) via API` + (alreadyFinished.length > 0 ? ` + ${alreadyFinished.length} already-finished match(es)` : "") + `...`
+    );
     let totalMatchesScored = 0;
     let totalPredictionsScored = 0;
-    let resultText = `\u2705 <b>Batch Scoring Complete!</b>
+    let skippedNotFinished = 0;
+    let skippedApiError = 0;
+    let resultText = "";
+    for (const match of pastMatches) {
+      try {
+        const fixture = await fetchMatchById(match.id);
+        if (!fixture || fixture.status !== "FINISHED" || fixture.home_score === null || fixture.away_score === null) {
+          skippedNotFinished++;
+          continue;
+        }
+        setMatchResult(match.id, fixture.home_score, fixture.away_score);
+        logAdminAction(ctx.from.id, "FINALIZE_ALL_MATCH", `matchId=${match.id} ${match.home_team} ${fixture.home_score}-${fixture.away_score} ${match.away_team}`);
+        const predictions = getPredictionsForMatch(match.id);
+        let scoredCount = 0;
+        for (const pred of predictions) {
+          if (pred.points_awarded !== null && pred.points_awarded !== void 0) continue;
+          const points = calculatePoints(
+            pred.predicted_home_score,
+            pred.predicted_away_score,
+            fixture.home_score,
+            fixture.away_score
+          );
+          awardPoints(pred.id, points, pred.user_telegram_id, pred.group_id ?? 0);
+          scoredCount++;
+        }
+        totalMatchesScored++;
+        totalPredictionsScored += scoredCount;
+        resultText += `\u26BD <b>${escapeHtml(match.home_team)} ${fixture.home_score}\u2013${fixture.away_score} ${escapeHtml(match.away_team)}</b>
+   ${scoredCount} prediction(s) scored
 
 `;
-    for (const match of matches) {
+      } catch (err) {
+        console.error(`finalize_all: API error for match ${match.id}:`, err.message);
+        skippedApiError++;
+      }
+    }
+    for (const match of alreadyFinished) {
       const predictions = getPredictionsForMatch(match.id);
       let scoredCount = 0;
       for (const pred of predictions) {
@@ -29472,7 +29610,7 @@ No finished matches with unscored predictions found.`,
       if (scoredCount > 0) {
         totalMatchesScored++;
         totalPredictionsScored += scoredCount;
-        resultText += `\u26BD <b>${escapeHtml(match.home_team)} ${match.actual_home_score}\u2013${match.actual_away_score} ${escapeHtml(match.away_team)}</b>
+        resultText += `\u26BD <b>${escapeHtml(match.home_team)} ${match.actual_home_score}\u2013${match.actual_away_score} ${escapeHtml(match.away_team)}</b> <i>(was already finished)</i>
    ${scoredCount} prediction(s) scored
 
 `;
@@ -29481,12 +29619,23 @@ No finished matches with unscored predictions found.`,
     logAdminAction(
       ctx.from.id,
       "FINALIZE_ALL",
-      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored}`
+      `matchesScored=${totalMatchesScored} predictionsScored=${totalPredictionsScored} skippedNotFinished=${skippedNotFinished} skippedApiError=${skippedApiError}`
     );
-    resultText += `\u{1F4CA} <b>Summary:</b>
-\u2022 ${totalMatchesScored} match(es) scored
-\u2022 ${totalPredictionsScored} prediction(s) awarded points`;
-    await ctx.reply(resultText, { parse_mode: "HTML" });
+    let summary = `\u2705 <b>Batch Finalize Complete!</b>
+
+`;
+    if (resultText) summary += resultText;
+    summary += `\u{1F4CA} <b>Summary:</b>
+`;
+    summary += `\u2022 ${totalMatchesScored} match(es) finalized & scored
+`;
+    summary += `\u2022 ${totalPredictionsScored} prediction(s) awarded points
+`;
+    if (skippedNotFinished > 0) summary += `\u2022 ${skippedNotFinished} match(es) not finished yet (skipped)
+`;
+    if (skippedApiError > 0) summary += `\u2022 ${skippedApiError} match(es) had API errors (use /admin_update &lt;id&gt; to retry)
+`;
+    await ctx.reply(summary, { parse_mode: "HTML" });
   });
   bot.command("admin_groups", adminOnly, async (ctx) => {
     const groups = getRegisteredGroups();
@@ -29651,15 +29800,17 @@ async function main() {
       { command: "start", description: "Join the prediction game" },
       { command: "matches", description: "View open fixtures & make predictions" },
       { command: "missing", description: "Matches you haven't predicted yet" },
-      { command: "mypicks", description: "Your current predictions" },
+      { command: "mypicks", description: "Your predictions across all groups" },
       { command: "mystats", description: "Your points & prediction history" },
       { command: "leaderboard", description: "Group & global leaderboard" },
+      { command: "lastresults", description: "Results & picks from last 24 hours" },
       { command: "help", description: "Show all available commands" }
     ], { scope: { type: "all_private_chats" } });
     await bot.telegram.setMyCommands([
       { command: "start", description: "Join the prediction game" },
       { command: "matches", description: "View open fixtures & predict" },
       { command: "leaderboard", description: "Group leaderboard" },
+      { command: "lastresults", description: "Results & picks from last 24 hours" },
       { command: "mystats", description: "Your stats & points" },
       { command: "help", description: "Show all available commands" }
     ], { scope: { type: "all_group_chats" } });
